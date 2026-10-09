@@ -6,6 +6,19 @@ ShadowBait is a controlled research prototype for inspecting shopping interfaces
 
 The current implementation is validated against the controlled **Morrow Market** demo website. Morrow Market is intentionally presented as a normal e-commerce storefront; its observable interface behavior gives ShadowBait repeatable evidence to capture. The ShadowBait platform owns the inspection console, guidelines, customer-impact explanation, interactive diff, case studies, and report.
 
+### Challenge One — Flipkart read-only scan
+
+`scripts/flipkart_challenge_one.py` applies the Member 1 evidence workflow to six public Flipkart pages: the homepage, headphone search, mobile category, clothing category, an unavailable electronics route (to preserve the observed response), and iPhone search. It captures visible text, HTML, full-page screenshots, and candidate **DP01 False Urgency** matches using the existing detector. Findings are deliberately labelled `POTENTIAL` and are not legal conclusions.
+
+The scanner is intentionally non-transactional: it does not log in, enter personal data, set a delivery location, add items to a cart, submit forms, or proceed to checkout.
+
+```bash
+python scripts/flipkart_challenge_one.py
+# output: evidence/live-scans/flipkart-challenge-one/report.json
+```
+
+Use `--url` repeatedly to run a smaller public, read-only scan against explicitly supplied Flipkart URLs.
+
 > **Technical scope:** The current prototype is not a fully generic crawler for every arbitrary public website. It is a controlled inspection and evidence pipeline designed to expand toward generic DOM discovery, user-journey crawling, browser-extension analysis, and larger annotated datasets.
 
 ---
