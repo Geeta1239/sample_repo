@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.env
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Evidence generated during scans
+evidence/scans/*
+evidence/screenshots/*
+evidence/dom/*
+evidence/reports/*
+!evidence/.gitkeep
+
+# ML artifacts
+ml/models/*
+ml/datasets/raw/*
+ml/datasets/processed/*
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Logs and reports
+*.log
+coverage/
+.pytest_cache/
+# Live Playwright inspection runs are generated locally for demos
+evidence/live-scans/*
+!evidence/live-scans/.gitkeep
+# Video recording intermediates; final narrated MP4 remains tracked
+reports/shadowbait-demo-video/*.webm
+reports/shadowbait-demo-video/*.wav
+reports/shadowbait-demo-video/frames/
+reports/dark-pattern-inspection/review/
+reports/shadowbait-demo-video/shadowbait-workflow.mp4
