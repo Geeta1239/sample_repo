@@ -25,6 +25,10 @@ Open `http://localhost:3000`.
 - `/bait-switch` — finish-selection product journey
 - `/interface-interference` — membership plan selection
 - `/clean-page` — transparent control page
+- `/ux-a11y-bad` — intentionally inaccessible comparison fixture
+- `/ux-a11y-good` — accessible comparison fixture
+- `/ux-readability-bad` — dense and ambiguous copy fixture
+- `/ux-readability-good` — concise, outcome-oriented copy fixture
 
 ## Scanable customer journeys
 
@@ -40,6 +44,8 @@ The behaviors remain available through ordinary storefront interactions so the i
 | Finish selection | `#bait-switch-status` | Offer state can change at the final step |
 
 These selectors and fixtures are implementation evidence for the scanner; they are not presented as labels to storefront visitors.
+
+The four UX-quality fixtures validate ShadowBait's separate accessibility and readability detector. The detector reports heuristic observations with DOM evidence, severity, confidence, and recommendations; it does not claim to be a complete WCAG audit.
 
 ## Light and dark theme
 

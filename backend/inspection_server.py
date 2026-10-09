@@ -27,6 +27,7 @@ from app.compliance.mapping import attach_compliance, attach_flipkart_heuristic_
 from app.database.repository import ScanDatabase  # noqa: E402
 from app.integration.m1_m2_adapter import classify_m1_finding  # noqa: E402
 from app.risk.scoring import calculate_risk  # noqa: E402
+from app.ux.analyzer import analyze_elements, analyze_html, not_assessable_for_screenshot  # noqa: E402
 from scripts.flipkart_challenge_one import (  # noqa: E402
     CATEGORY_DEFINITIONS,
     DEFAULT_URLS,
@@ -122,6 +123,33 @@ def launch_browser(playwright):
     return playwright.chromium.launch(**options)
 
 
+def collect_ux_elements(page) -> list[dict]:
+    """Collect semantic and computed-style evidence without guessing from screenshots."""
+    try:
+        elements = page.evaluate("""() => Array.from(document.querySelectorAll(
+          'input, select, textarea, button, a, img, p, label, h1, h2, h3, h4, h5, h6'
+        )).map((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return {
+            tag: element.tagName.toLowerCase(), id: element.id || '',
+            role: element.getAttribute('role') || '',
+            text: (element.innerText || element.value || '').trim(),
+            ariaLabel: element.getAttribute('aria-label') || '',
+            ariaLabelledby: element.getAttribute('aria-labelledby') || '',
+            alt: element.getAttribute('alt'), inputType: element.getAttribute('type') || '',
+            html: element.outerHTML, visible: Boolean(rect.width && rect.height),
+            selector: element.id ? `#${element.id}` : element.tagName.toLowerCase(),
+            boundingBox: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) },
+            fontSize: style.fontSize, lineHeight: style.lineHeight,
+            color: style.color, backgroundColor: style.backgroundColor,
+          };
+        })""")
+        return elements if isinstance(elements, list) else []
+    except Exception:
+        return []
+
+
 def finalize_findings(findings: list[dict], compliance_mapper=attach_compliance) -> list[dict]:
     """Normalize classification and compliance for every scan input type."""
     finalized = []
@@ -145,6 +173,7 @@ def finalize_report(report: dict, compliance_mapper=attach_compliance) -> dict:
     """Compute risk, compliance, and summary from the same finalized findings."""
     result = dict(report)
     result["findings"] = finalize_findings(result.get("findings", []), compliance_mapper)
+    result["ux_findings"] = list(result.get("ux_findings", [])) if isinstance(result.get("ux_findings", []), list) else []
     result["risk"] = calculate_risk(result)
     result["compliance"] = summarize_compliance(result["findings"])
     summary = dict(result.get("summary", {}))
@@ -156,6 +185,10 @@ def finalize_report(report: dict, compliance_mapper=attach_compliance) -> dict:
         "m2_verified_findings": sum(1 for item in m2_findings if item.get("status") == "VERIFIED"),
         "compliance_mapped_findings": result["compliance"]["mapped_findings"],
         "compliance_verified_mappings": result["compliance"]["verified_mappings"],
+        "ux_findings": sum(1 for item in result["ux_findings"] if item.get("status") != "NOT_ASSESSABLE"),
+        "accessibility_findings": sum(1 for item in result["ux_findings"] if item.get("category") == "ACCESSIBILITY"),
+        "readability_findings": sum(1 for item in result["ux_findings"] if item.get("category") == "READABILITY"),
+        "ux_not_assessable": sum(1 for item in result["ux_findings"] if item.get("status") == "NOT_ASSESSABLE"),
     })
     result["summary"] = summary
     return result
@@ -287,13 +320,16 @@ class Handler(BaseHTTPRequestHandler):
         html = extracted if suffix in {".html", ".htm", ".xml", ".svg"} else ""
         matches = detect_category_matches(extracted, html)
         screenshot_value = data_url(raw) if kind == "screenshot" else ""
+        ux_findings = analyze_html(extracted, source="OCR readability heuristic" if kind == "screenshot" else "Uploaded HTML/content heuristic")
+        if kind == "screenshot":
+            ux_findings.extend(not_assessable_for_screenshot("Screenshot input has no DOM or semantic markup.", repo_path(artifact_path)))
         category_results = build_category_results(matches, f"upload://{filename}", repo_path(artifact_path), repo_path(artifact_path))
         findings = []
         for item in category_results:
             if item["status"] != "POTENTIAL":
                 continue
             findings.append({**item, "id": item["pattern_id"], "name": item["pattern_name"], "route": f"upload://{filename}", "selector": "OCR text" if kind == "screenshot" else "file content", "screenshot": screenshot_value, "screenshot_file": repo_path(artifact_path) if kind == "screenshot" else "", "observed_text": "; ".join(item["evidence_text"]), "evidence": "; ".join(item["evidence_text"]), "harm": item["customer_harm"], "fix": item["recommendation"]})
-        report = {"scan": {"scan_id": scan_id, "target": f"upload://{filename}", "mode": f"{kind} artifact scan", "started_at": datetime.now(timezone.utc).isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(), "pattern_ids": [item[0] for item in CATEGORY_DEFINITIONS]}, "categories": [{"pattern_id": item[0], "pattern_name": item[1], "family": item[2]} for item in CATEGORY_DEFINITIONS], "pages": [{"index": 1, "url_final": f"upload://{filename}", "title": filename, "category_results": category_results, "visible_text_characters": len(extracted), "artifact": repo_path(artifact_path)}], "findings": findings, "summary": {"pages_scanned": 1, "pages_requested": 1, "taxonomy_categories": len(CATEGORY_DEFINITIONS), "potential_matches": len(findings), "input_kind": kind, "filename": filename, "ocr_characters": len(extracted) if kind == "screenshot" else 0, "rogue_malware_status": "EXCLUDED_BY_SCOPE"}}
+        report = {"scan": {"scan_id": scan_id, "target": f"upload://{filename}", "mode": f"{kind} artifact scan", "started_at": datetime.now(timezone.utc).isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(), "pattern_ids": [item[0] for item in CATEGORY_DEFINITIONS]}, "categories": [{"pattern_id": item[0], "pattern_name": item[1], "family": item[2]} for item in CATEGORY_DEFINITIONS], "pages": [{"index": 1, "url_final": f"upload://{filename}", "title": filename, "category_results": category_results, "visible_text_characters": len(extracted), "artifact": repo_path(artifact_path)}], "findings": findings, "ux_findings": ux_findings, "summary": {"pages_scanned": 1, "pages_requested": 1, "taxonomy_categories": len(CATEGORY_DEFINITIONS), "potential_matches": len(findings), "input_kind": kind, "filename": filename, "ocr_characters": len(extracted) if kind == "screenshot" else 0, "rogue_malware_status": "EXCLUDED_BY_SCOPE"}}
         report = finalize_report(report, attach_flipkart_heuristic_mapping)
         write_json(out_dir / "report.json", report)
         STORE.create(scan_id, report["scan"]["target"], report["scan"]["pattern_ids"])
@@ -368,8 +404,23 @@ class Handler(BaseHTTPRequestHandler):
             )
             emit("started", {"scan_id": scan_id, "target": target, "browser": "Chromium", "viewport": {"width": 1440, "height": 1000}, "total": total_steps, "pattern_ids": pattern_ids, "mode": "Flipkart 13-category scan with isolated cart check", "message": message})
         streamed_findings = []
+        ux_findings = []
         def on_page(page: dict, index: int, total: int) -> None:
             page_url = page.get("url_final", page.get("url_requested", ""))
+            dom_html_path = REPO_ROOT / page["dom_html"] if page.get("dom_html") else None
+            dom_text_path = REPO_ROOT / page["dom_text"] if page.get("dom_text") else None
+            if dom_html_path and dom_html_path.is_file():
+                visible_text = ""
+                if dom_text_path and dom_text_path.is_file():
+                    try:
+                        visible_text = json.loads(dom_text_path.read_text(encoding="utf-8")).get("visible_text", "")
+                    except (OSError, json.JSONDecodeError):
+                        visible_text = ""
+                page_ux = analyze_html(dom_html_path.read_text(encoding="utf-8", errors="replace"), visible_text, source="Captured public-page HTML heuristic")
+                for item in page_ux:
+                    item["evidence"]["page"] = page_url
+                    item["evidence"]["screenshot"] = page.get("screenshot", "")
+                ux_findings.extend(page_ux)
             if emit:
                 page_status = page.get("status") or ("ERROR" if page.get("error") else "INSPECTED")
                 emit("stage", {"completed": index, "total": total_steps, "page_index": index, "page_url": page_url, "page_title": page.get("title", ""), "page_status": page_status, "message": page.get("message") or f"Inspected Flipkart page {index}/{total_steps}: {page_url}"})
@@ -414,7 +465,7 @@ class Handler(BaseHTTPRequestHandler):
             **{key: value for key, value in risk.items() if key != "scored_findings"},
         }
         finished_at = raw.get("scan", {}).get("finished_at") or datetime.now(timezone.utc).isoformat()
-        report = {"scan": {**raw.get("scan", {}), "scan_id": scan_id, "target": target, "pattern_ids": pattern_ids, "finished_at": finished_at}, "categories": raw.get("categories", []), "pages": pages, "findings": findings, "cart_interaction": raw.get("cart_interaction", {}), "risk": risk, "compliance": compliance, "summary": summary}
+        report = {"scan": {**raw.get("scan", {}), "scan_id": scan_id, "target": target, "pattern_ids": pattern_ids, "finished_at": finished_at}, "categories": raw.get("categories", []), "pages": pages, "findings": findings, "ux_findings": ux_findings, "cart_interaction": raw.get("cart_interaction", {}), "risk": risk, "compliance": compliance, "summary": summary}
         report = finalize_report(report, attach_flipkart_heuristic_mapping)
         out_dir.mkdir(parents=True, exist_ok=True)
         for path in (out_dir / "scan.json", out_dir / "report.json", out_dir / "response.json"):
@@ -494,6 +545,7 @@ class Handler(BaseHTTPRequestHandler):
         if emit:
             emit("started", {**scan_meta, "total": len(selected_findings), "message": "Chromium browser started with a fresh context."})
         captured = []
+        ux_findings = []
         with sync_playwright() as playwright:
             browser = launch_browser(playwright)
             context = browser.new_context(viewport={"width": 1440, "height": 1000}, color_scheme="light")
@@ -519,6 +571,7 @@ class Handler(BaseHTTPRequestHandler):
                 text_path = dom_dir / f"{route_slug}-text.json"
                 html_path.write_text(page.content(), encoding="utf-8")
                 write_json(text_path, {"route": finding["route"], "url": page.url, "title": page.title(), "visible_text": page.locator("body").inner_text()})
+                ux_findings.extend(analyze_elements(collect_ux_elements(page), page.locator("body").inner_text(), source="Controlled-site DOM heuristic", screenshot=repo_path(screenshot_path)))
                 result = {**finding, "status": "VERIFIED", "visible": visible, "observed_text": text, "element_state": element_state, "screenshot": data_url(screenshot), "screenshot_file": repo_path(screenshot_path), "dom_html_file": repo_path(html_path), "dom_text_file": repo_path(text_path), "captured_at": datetime.now(timezone.utc).isoformat()}
                 if finding["id"] == "DP02":
                     page.locator("#donation").uncheck()
@@ -546,7 +599,7 @@ class Handler(BaseHTTPRequestHandler):
             browser.close()
         finished_at = datetime.now(timezone.utc).isoformat()
         all_m2 = [item for finding in captured for item in finding.get("m2_findings", [])]
-        report = {"scan": {**scan_meta, "finished_at": finished_at}, "findings": captured, "summary": {"verified_findings": len(captured), "pages_scanned": len(set(item["route"] for item in captured)), "m2_classified_findings": len(all_m2), "m2_verified_findings": sum(1 for item in all_m2 if item.get("status") == "VERIFIED"), "m2_detection_sources": {source: sum(1 for item in all_m2 if item.get("detection_source") == source) for source in sorted({item.get("detection_source") for item in all_m2})}}}
+        report = {"scan": {**scan_meta, "finished_at": finished_at}, "findings": captured, "ux_findings": ux_findings, "summary": {"verified_findings": len(captured), "pages_scanned": len(set(item["route"] for item in captured)), "m2_classified_findings": len(all_m2), "m2_verified_findings": sum(1 for item in all_m2 if item.get("status") == "VERIFIED"), "m2_detection_sources": {source: sum(1 for item in all_m2 if item.get("detection_source") == source) for source in sorted({item.get("detection_source") for item in all_m2})}}}
         report = finalize_report(report, attach_compliance)
         report["summary"]["compliance_mapped_findings"] = report["compliance"]["mapped_findings"]
         report["summary"]["compliance_verified_mappings"] = report["compliance"]["verified_mappings"]
@@ -651,6 +704,7 @@ class Handler(BaseHTTPRequestHandler):
             html_path = dom_dir / "01-page.html"
             text_path = dom_dir / "01-page-text.json"
             screenshot = page.screenshot(path=str(screenshot_path), full_page=True)
+            ux_findings = analyze_elements(collect_ux_elements(page), visible_text, source="Public-page DOM heuristic", screenshot=repo_path(screenshot_path)) if not (page_blocked or no_content) else []
             html_path.write_text(html, encoding="utf-8")
             write_json(text_path, {
                 "url": page.url,
@@ -757,6 +811,7 @@ class Handler(BaseHTTPRequestHandler):
             ],
             "pages": [page_record],
             "findings": findings,
+            "ux_findings": ux_findings,
             "risk": risk,
             "compliance": compliance,
             "summary": summary,

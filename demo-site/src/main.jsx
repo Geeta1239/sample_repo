@@ -57,6 +57,10 @@ function App() {
     if (path === '/bait-switch') return <BaitSwitchPage />;
     if (path === '/interface-interference') return <InterfaceInterferencePage />;
     if (path === '/clean-page') return <CleanPage />;
+    if (path === '/ux-a11y-bad') return <UxA11yBad />;
+    if (path === '/ux-a11y-good') return <UxA11yGood />;
+    if (path === '/ux-readability-bad') return <UxReadabilityBad />;
+    if (path === '/ux-readability-good') return <UxReadabilityGood />;
     return <HomePage />;
   }, [path, minutes, seconds, donationChecked, total]);
 
@@ -113,6 +117,18 @@ function InterfaceInterferencePage() {
   return <div className="store-page narrow-page"><div className="store-breadcrumb">Home <span>/</span> Morrow Circle</div><section className="comparison-page"><span className="store-kicker">MEMBERSHIP PLANS</span><h1>Choose what fits.</h1><p>Flexible access to the Morrow edit.</p><div className="plan-choice preferred" data-ccpa-pattern="INTERFACE_INTERFERENCE"><span className="plan-badge">MOST POPULAR</span><h2>Circle Plus</h2><p>Free delivery, early access, and private edits.</p><strong>₹99 <small>/ month</small></strong><button className="store-primary">Choose Circle Plus</button></div><div className="plan-choice muted-choice"><h2>Shop as you go</h2><p>Pay standard delivery on each order.</p><button className="muted-link">Continue without membership</button></div></section></div>;
 }
 
+function UxA11yBad() {
+  return <div className="store-page narrow-page"><section className="account-card"><h1>Account details</h1><h3>Contact</h3><img src="/assets/headphones-product.jpg" style={{width: 30, height: 30}} /><input id="email" placeholder="Email" /><button style={{fontSize: 10, color: '#aaa', background: '#fff', width: 18, height: 18}}>Continue</button><p style={{color: '#aaa', background: '#fff'}}>Please review the information above before continuing.</p></section></div>;
+}
+function UxA11yGood() {
+  return <div className="store-page narrow-page"><main className="account-card"><h1>Account details</h1><h2>Contact information</h2><img src="/assets/headphones-product.jpg" alt="Aster headphones product" style={{width: 120, height: 120}} /><label htmlFor="good-email">Email address</label><input id="good-email" aria-label="Email address" autoComplete="email" /><button aria-label="Save account details">Save account details</button><p>We use your email to send order updates.</p></main></div>;
+}
+function UxReadabilityBad() {
+  return <div className="store-page narrow-page"><section className="account-card"><h1>IMPORTANT ACCOUNT NOTICE</h1><p>Before you continue with this account process please carefully review all of the information presented on this page because the next step may change your preferences and affect the availability of certain benefits depending on the selections that you make and the timing of your response.</p><button>Continue</button></section></div>;
+}
+function UxReadabilityGood() {
+  return <div className="store-page narrow-page"><section className="account-card"><h1>Review your account</h1><p>Check your details before saving.</p><button>Save account details</button></section></div>;
+}
 function CleanPage() {
   return <div className="store-page narrow-page clean-page"><div className="store-breadcrumb">Home <span>/</span> Transparency</div><section className="account-card"><span className="store-kicker">OUR PROMISE</span><h1>A clear, considered checkout.</h1><p>This control page uses transparent stock, complete pricing, neutral choices, and an equal presentation of options.</p><div className="clean-list"><div><strong>12 units available</strong><span>No artificial countdown or scarcity message.</span></div><div><strong>Optional extras start unchecked</strong><span>You choose before anything is added.</span></div><div><strong>Complete price shown early</strong><span>Fees are visible before checkout.</span></div></div><button className="store-secondary" onClick={() => navigate('/product')}>Continue shopping</button></section></div>;
 }
