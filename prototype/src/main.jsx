@@ -98,7 +98,7 @@ function App() {
     source.addEventListener('complete', async (event) => {
       const data = JSON.parse(event.data);
       const apiRoot = window.localStorage.getItem('shadowbait-inspection-api') || '';
-      let report = { scan: { ...(data.scan || {}), target: normalized, scan_id: data.scan_id, finished_at: data.finished_at }, findings: data.findings || [], summary: data.summary || {} };
+      let report = { scan: { ...(data.scan || {}), target: normalized, scan_id: data.scan_id, finished_at: data.finished_at }, findings: data.findings || [], ux_findings: data.ux_findings || [], summary: data.summary || {} };
       try { const response = await fetch(`${apiRoot}/api/scans/${encodeURIComponent(data.scan_id)}/report`); if (response.ok) report = await response.json(); } catch { /* stream payload remains usable */ }
       setScan((current) => ({ ...current, running: false, completed: data.completed || current.total, total: data.total || current.total, findings: data.findings || current.findings, pages: report.pages || current.pages, message: data.message, meta: { ...(current.meta || {}), finished_at: data.finished_at, summary: data.summary }, report, scanId: data.scan_id }));
       source.close();

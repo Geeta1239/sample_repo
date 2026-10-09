@@ -117,7 +117,7 @@ def write_json(path: Path, value: dict) -> None:
 
 def launch_browser(playwright):
     options = {}
-    custom_path = os.environ.get("SHADOWBAIT_CHROMIUM_PATH")
+    custom_path = os.environ.get("SHADOWBAIT_CHROMIUM_PATH") or shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
     if custom_path:
         options["executable_path"] = custom_path
     return playwright.chromium.launch(**options)
@@ -533,6 +533,8 @@ class Handler(BaseHTTPRequestHandler):
         ):
             return self.run_public_page_scan(target, emit=emit, scan_id=scan_id)
 
+        if parsed_target.path.startswith("/ux-"):
+            return self.run_public_page_scan(target, emit=emit, scan_id=scan_id)
         scan_id = scan_id or "live-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         pattern_ids = pattern_ids or list(FINDING_BY_ID)
         selected_findings = [FINDING_BY_ID[item] for item in pattern_ids]
@@ -847,8 +849,9 @@ class Handler(BaseHTTPRequestHandler):
                 "scan_id": scan_id,
                 "completed": 1,
                 "total": 1,
-                "findings": findings,
-                "summary": summary,
+                "findings": report["findings"],
+                "ux_findings": report["ux_findings"],
+                "summary": report["summary"],
                 "finished_at": finished_at,
                 "scan": report["scan"],
                 "message": message,

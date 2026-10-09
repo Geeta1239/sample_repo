@@ -12,6 +12,7 @@ import html as html_lib
 import json
 import os
 import re
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -92,7 +93,7 @@ def artifact_path(path: Path) -> str:
 
 
 def launch_browser(playwright):
-    executable = os.environ.get("SHADOWBAIT_CHROMIUM_PATH")
+    executable = os.environ.get("SHADOWBAIT_CHROMIUM_PATH") or shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
     options = {"executable_path": executable} if executable else {}
     return playwright.chromium.launch(**options)
 
