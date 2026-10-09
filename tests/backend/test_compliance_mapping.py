@@ -5,7 +5,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "backend"))
 
-from app.compliance.mapping import attach_compliance, mapping_for, summarize_compliance
+from app.compliance.mapping import (
+    attach_compliance,
+    attach_flipkart_heuristic_mapping,
+    mapping_for,
+    summarize_compliance,
+)
 
 
 def test_basket_sneaking_mapping_contains_human_review_fields():
@@ -34,3 +39,15 @@ def test_summary_counts_mappings_and_discloses_scope():
     assert summary["verified_mappings"] == 1
     assert "False Urgency" in summary["categories"]
     assert "not a legal determination" in summary["scope"]
+
+
+def test_flipkart_heuristic_mapping_is_category_specific_and_candidate():
+    finding = attach_flipkart_heuristic_mapping({
+        "id": "DP01",
+        "name": "False Urgency",
+        "status": "POTENTIAL",
+    })
+    assert finding["compliance"]["category"] == "False Urgency"
+    assert finding["compliance"]["status"] == "CANDIDATE"
+    assert finding["compliance"]["source"] == "Flipkart 13-category heuristic mapping"
+    assert finding["compliance"]["recommendation"]

@@ -4,9 +4,9 @@
 
 ShadowBait is a controlled research prototype for inspecting shopping interfaces for dark-pattern signals. The system combines a separate consumer-facing demo site, a separate ShadowBait inspection console, browser automation, structured evidence capture, rule-based/NLP classification, risk scoring, compliance-oriented mapping, SQLite persistence, and saved results.
 
-The current implementation is validated against the controlled **Morrow Market** demo website. Morrow Market is intentionally presented as a normal e-commerce storefront; its observable interface behavior gives ShadowBait repeatable evidence to capture. The ShadowBait platform owns the inspection console, guidelines, customer-impact explanation, interactive diff, case studies, and report.
+The controlled **Morrow Market** demo website remains the deterministic regression fixture. The inspection console can also inspect one user-supplied public HTTP(S) page, capture its visible text, DOM, screenshot, and evidence-backed candidates, and present the resulting risk and heuristic mappings for human review.
 
-### Challenge One — Flipkart read-only scan
+### Challenge One — Flipkart public-page scan
 
 `scripts/flipkart_challenge_one.py` applies the Member 1 evidence workflow to six public Flipkart pages: the homepage, headphone search, mobile category, clothing category, an unavailable electronics route (to preserve the observed response), and iPhone search. It captures visible text, HTML, full-page screenshots, and candidate matches across the complete 13-category atlas: False Urgency, Basket Sneaking, Confirm Shaming, Forced Action, Subscription Trap, Interface Interference, Bait and Switch, Drip Pricing, Disguised Advertisement, Nagging, Trick Question, SaaS Billing, and Rogue Malware.
 
@@ -24,16 +24,26 @@ The inspection console supports:
 
 Potential findings include `severity`, a transparent heuristic `confidence`, `customer_harm`, observed evidence, and an ethical recommendation. These are review candidates, not legal conclusions.
 
-The scanner is intentionally non-transactional: it does not log in, enter personal data, set a delivery location, add items to a cart, submit forms, or proceed to checkout.
+When the Flipkart homepage is entered, the scanner inspects its six-page public sample; a Flipkart product or search URL is scanned exactly as entered.
+
+The scanner uses an isolated, temporary browser context. It may select one public product and add it to that temporary cart to inspect cart-level defaults and fees, then attempts to remove it. It never logs in, enters personal data, sets a delivery location, submits an order, or proceeds to checkout/payment. The context is discarded at the end of the scan.
+
+Detection is limited to signals visible in the captured public pages and the isolated cart. Forced account actions, subscriptions, repeated prompts, checkout fees, and visual ad disguise may require journeys or visual comparison beyond this safe scan. A page marked `NOT_OBSERVED` is not proof that the pattern is absent.
+
+### Arbitrary public-page inspection
+
+For a non-Flipkart URL, enter the exact page URL in the dashboard. ShadowBait inspects that single public page across the same 13-category heuristic atlas; it does not crawl links, log in, click controls, submit forms, add items to carts, or proceed through checkout. Private/local-network addresses and non-standard ports are blocked, except the local development targets `http://localhost:3000` and `http://localhost:3001`. Heuristic matches are candidates for human review, not conclusions.
+
+If a site returns an empty page or an access/rate-limit response (for example, Amazon may return HTTP 202 with no visible content), the scan reports that page status and does not present it as a clean inspection or infer that no patterns exist.
 
 ```bash
 python scripts/flipkart_challenge_one.py
 # output: evidence/live-scans/flipkart-challenge-one/report.json
 ```
 
-Use `--url` repeatedly to run a smaller public, read-only scan against explicitly supplied Flipkart URLs.
+Use `--url` repeatedly to scan explicitly supplied Flipkart URLs with the same bounded, isolated cart check.
 
-> **Technical scope:** The generalized URL mode inspects the supplied public page and does not log in, submit forms, add items to carts, or traverse destructive flows. It is not a full authenticated crawler or a legal determination system.
+> **Technical scope:** Generic public URLs receive a bounded, read-only single-page inspection, not a site-wide crawl or multi-step journey. It does not log in, submit forms, or add items to carts. The controlled Morrow Market flow and Flipkart flow retain their specialized behavior.
 
 ---
 
@@ -113,7 +123,7 @@ The project was designed around these goals:
 |---|---|---|
 | Morrow Market/Vite | `http://localhost:3000` | Separate controlled target website and fixtures |
 | ShadowBait/Vite | `http://localhost:3100` | Separate inspection console and presentation UI |
-| Inspection API | `http://127.0.0.1:5050` | Playwright, SSE, scan API, report generation |
+| Inspection API | `http://127.0.0.1:5051` | Playwright, SSE, scan API, report generation |
 | SQLite | `evidence/shadowbait.sqlite3` | Scan history and structured persistence |
 
 Both Vite development servers proxy `/api` and `/health` to the inspection API through their respective `vite.config.js` files. ShadowBait receives the target site URL explicitly; it no longer assumes that `window.location.origin` is the scan target.
@@ -382,7 +392,7 @@ PYTHONPATH=backend python backend/inspection_server.py
 Health check:
 
 ```bash
-curl http://127.0.0.1:5050/health
+curl http://127.0.0.1:5051/health
 ```
 
 The prototype proxies `/api` to the API and starts the live stream with the explicit target URL entered by the presenter.
@@ -391,7 +401,7 @@ Optional environment variables:
 
 ```text
 INSPECTION_API_HOST       API bind address; default 0.0.0.0
-INSPECTION_API_PORT       API port; default 5050
+INSPECTION_API_PORT       API port; default 5051
 SHADOWBAIT_TARGET_URL     default scan target; default http://127.0.0.1:3000
 SHADOWBAIT_EVIDENCE_DIR   evidence root; default repository/evidence
 SHADOWBAIT_DB_PATH        SQLite path; default evidence/shadowbait.sqlite3
@@ -875,7 +885,7 @@ npm run dev -- --port 3000
 
 ```bash
 PYTHONPATH=backend python backend/inspection_server.py
-curl http://127.0.0.1:5050/health
+curl http://127.0.0.1:5051/health
 ```
 
 ### Chromium is missing

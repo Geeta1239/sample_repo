@@ -25,10 +25,12 @@ npm run dev -- --port 3100
 In a third terminal:
 
 ```bash
-PYTHONPATH=backend python backend/inspection_server.py
+python backend/inspection_server.py
 ```
 
 Open `http://localhost:3100`.
+
+The inspection API uses port `5051` by default to avoid conflicts with other local projects. Enter any public HTTP(S) page URL to inspect that one page read-only; private/local targets and non-standard ports are blocked, except the local development targets `http://localhost:3000` and `http://localhost:3001`. This mode does not crawl, log in, click controls, or submit forms. Flipkart scans may add one product to an isolated temporary cart, inspect it, and attempt to remove it; they never submit checkout or payment.
 
 ## Judge-facing flow
 

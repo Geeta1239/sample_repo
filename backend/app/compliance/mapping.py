@@ -59,6 +59,116 @@ COMPLIANCE_MAP: dict[str, dict[str, str]] = {
     },
 }
 
+FLIPKART_HEURISTIC_MAP: dict[str, dict[str, str]] = {
+    "DP01": {
+        "category": "False Urgency",
+        "principle": "Truthful availability and time pressure",
+        "description": "Scarcity or time language may pressure a purchase decision.",
+        "harm": "Can reduce time available to compare options and make an informed choice.",
+        "recommendation": "Use only verifiable stock and offer deadlines, stated in neutral language.",
+    },
+    "DP02": {
+        "category": "Basket Sneaking",
+        "principle": "Affirmative choice for optional additions",
+        "description": "An optional product, service, fee, or protection may be preselected.",
+        "harm": "Can add cost or commitment without an intentional customer choice.",
+        "recommendation": "Leave optional items unselected and clearly disclose their price.",
+    },
+    "DP03": {
+        "category": "Confirm Shaming",
+        "principle": "Neutral and understandable choice language",
+        "description": "Decline wording may shame or guilt the customer.",
+        "harm": "Can steer a decision through emotional pressure rather than clear consequences.",
+        "recommendation": "Use equally neutral labels for accepting and declining an offer.",
+    },
+    "DP04": {
+        "category": "Forced Action",
+        "principle": "Necessary and proportionate account requirements",
+        "description": "An unrelated account or verification step may be required to continue.",
+        "harm": "Can restrict access or collect information beyond what the transaction needs.",
+        "recommendation": "Explain why each required step is necessary and offer guest access where practical.",
+    },
+    "DP05": {
+        "category": "Subscription Trap",
+        "principle": "Transparent recurring commitment and cancellation",
+        "description": "Trial, renewal, or cancellation terms may obscure an ongoing commitment.",
+        "harm": "Can cause unexpected recurring charges or make exit difficult.",
+        "recommendation": "Disclose renewal timing, amount, and cancellation steps before commitment.",
+    },
+    "DP06": {
+        "category": "Interface Interference",
+        "principle": "Balanced presentation of consequential choices",
+        "description": "Visual or interaction hierarchy may steer customers toward one choice.",
+        "harm": "Can obscure a lower-cost or lower-commitment alternative.",
+        "recommendation": "Give consequential choices comparable visibility and clarity.",
+    },
+    "DP07": {
+        "category": "Bait and Switch",
+        "principle": "Consistency between advertised and available offer",
+        "description": "An advertised product or price may become unavailable or change during selection.",
+        "harm": "Can redirect purchase intent to a different or more expensive option.",
+        "recommendation": "Keep the advertised offer available or disclose changes clearly before selection.",
+    },
+    "DP08": {
+        "category": "Drip Pricing",
+        "principle": "Complete and timely price disclosure",
+        "description": "A fee may appear after the initial price is presented.",
+        "harm": "Can make comparison difficult until a later purchase step.",
+        "recommendation": "Show mandatory fees and the total payable price as early as possible.",
+    },
+    "DP09": {
+        "category": "Disguised Advertisement",
+        "principle": "Recognizable commercial content",
+        "description": "An advertisement may not be clearly distinguishable from other content.",
+        "harm": "Can prevent customers from recognizing commercial persuasion.",
+        "recommendation": "Label paid placements clearly and use visual treatment distinguishable from organic content.",
+    },
+    "DP10": {
+        "category": "Nagging",
+        "principle": "Respect for declined or dismissed prompts",
+        "description": "A prompt may be repeated after a customer declines or dismisses it.",
+        "harm": "Can add friction and pressure a customer to accept.",
+        "recommendation": "Respect a decline and avoid repeating non-essential prompts.",
+    },
+    "DP11": {
+        "category": "Trick Question",
+        "principle": "Clear questions and predictable consequences",
+        "description": "Question or option wording may make the intended consequence unclear.",
+        "harm": "Can lead a customer to make a choice they did not intend.",
+        "recommendation": "Use direct, single-negative questions and describe each option's consequence.",
+    },
+    "DP12": {
+        "category": "SaaS Billing",
+        "principle": "Transparent recurring billing",
+        "description": "Billing cadence or recurring payment terms may be unclear.",
+        "harm": "Can cause unexpected recurring charges or renewal confusion.",
+        "recommendation": "State the billing interval, amount, renewal date, and cancellation method together.",
+    },
+}
+
+
+def attach_flipkart_heuristic_mapping(
+    finding: Mapping[str, Any],
+    source: str = "Flipkart 13-category heuristic mapping",
+) -> dict[str, Any]:
+    result = dict(finding)
+    pattern_id = str(result.get("id") or result.get("pattern_id") or "")
+    base = dict(FLIPKART_HEURISTIC_MAP.get(pattern_id, {
+        "category": str(result.get("name") or "Unmapped pattern"),
+        "principle": "Human-readable and balanced choice",
+        "description": "This candidate has no category-specific heuristic mapping.",
+        "harm": "Requires human review before drawing a conclusion.",
+        "recommendation": "Review the captured interface and provide a clear, neutral alternative.",
+    }))
+    base.update({
+        "pattern_id": pattern_id,
+        "status": "CANDIDATE",
+        "scope": "heuristic technical mapping for human review",
+        "source": source,
+    })
+    result["compliance"] = base
+    return result
+
 
 def mapping_for(pattern_id: str | None, finding: Mapping[str, Any] | None = None) -> dict[str, Any]:
     key = str(pattern_id or "")

@@ -49,7 +49,7 @@ backend/inspection_server.py
 demo-site/vite.config.js
 ```
 
-This path starts when the user clicks **Start Inspection** in the website. The React page opens an EventSource connection to `/api/inspection/stream`. Vite proxies `/api` to the Python inspection server on port `5050`. The server runs Playwright and writes:
+This path starts when the user clicks **Start Inspection** in the website. The React page opens an EventSource connection to `/api/inspection/stream`. Vite proxies `/api` to the Python inspection server on port `5051`. The server runs Playwright and writes:
 
 ```text
 evidence/live-scans/live-<timestamp>/
@@ -210,14 +210,14 @@ The Vite proxy maps:
 ```text
 http://localhost:3000/api/*
         ↓
-http://127.0.0.1:5050/api/*
+http://127.0.0.1:5051/api/*
 ```
 
 Specifically:
 
 ```text
-/api    → http://127.0.0.1:5050
-/health → http://127.0.0.1:5050
+/api    → http://127.0.0.1:5051
+/health → http://127.0.0.1:5051
 ```
 
 This lets the browser call `/api/inspection/stream` on the same origin while the actual scan runs in the Python service.
@@ -247,7 +247,7 @@ At startup, the service reads:
 
 ```text
 INSPECTION_API_HOST       default: 0.0.0.0
-INSPECTION_API_PORT       default: 5050
+INSPECTION_API_PORT       default: 5051
 SHADOWBAIT_TARGET_URL     default: http://127.0.0.1:3000
 SHADOWBAIT_EVIDENCE_DIR   default: repository/evidence
 ```
@@ -745,7 +745,7 @@ That is the roadmap from a controlled benchmark to a general inspection tool.
 | `demo-site/package.json` | React/Vite commands and dependencies | Working |
 | `demo-site/src/main.jsx` | Demo pages, fixtures, route state, inspection UI | Working |
 | `demo-site/src/styles.css` | Visual fixture presentation | Working |
-| `demo-site/vite.config.js` | `/api` proxy to port 5050 | Working |
+| `demo-site/vite.config.js` | `/api` proxy to port 5051 | Working |
 | `backend/inspection_server.py` | Live SSE inspection, Playwright, live evidence | Working |
 | `scripts/member1_inspection.py` | Standalone scanner and evidence writer | Working |
 | `scripts/verify_scan_outputs.py` | Evidence artifact verifier | Working |

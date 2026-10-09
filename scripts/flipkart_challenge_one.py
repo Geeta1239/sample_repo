@@ -8,6 +8,7 @@ enter personal data. Results are review candidates, not legal conclusions.
 from __future__ import annotations
 
 import argparse
+import html as html_lib
 import json
 import os
 import re
@@ -15,6 +16,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urljoin, urlparse
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
@@ -112,6 +114,38 @@ def _false_urgency(text: str) -> list[str]:
     return [match.evidence_text for match in detect_false_urgency(segment_text(text))]
 
 
+def _preselected_addons(html: str) -> list[str]:
+    evidence: list[str] = []
+    addon_terms = re.compile(
+        r"\b(?:donation|contribution|insurance|protection|extended warranty|gift wrap|add[- ]?on)\b",
+        re.IGNORECASE,
+    )
+    checked_input = re.compile(
+        r"<input\b(?=[^>]*\btype\s*=\s*['\"]?checkbox\b)"
+        r"(?=[^>]*\bchecked(?:\s|=|/?>))[^>]*>",
+        re.IGNORECASE,
+    )
+    for match in checked_input.finditer(html):
+        input_tag = match.group(0)
+        input_id = re.search(r"\bid\s*=\s*['\"]([^'\"]+)['\"]", input_tag, re.IGNORECASE)
+        if input_id:
+            label = re.search(
+                rf"<label\b(?=[^>]*\bfor\s*=\s*['\"]{re.escape(input_id.group(1))}['\"])[^>]*>"
+                rf"(.*?)</label>",
+                html,
+                re.IGNORECASE | re.DOTALL,
+            )
+        else:
+            label = None
+        label_text = ""
+        if label:
+            label_text = html_lib.unescape(re.sub(r"<[^>]+>", " ", label.group(1)))
+            label_text = re.sub(r"\s+", " ", label_text).strip()
+        if label_text and addon_terms.search(label_text):
+            evidence.append(f"Preselected checkbox: {label_text}")
+    return evidence
+
+
 def detect_category_matches(visible_text: str, html: str = "") -> dict[str, list[str]]:
     """Apply transparent, conservative heuristics to all 13 categories.
 
@@ -119,31 +153,29 @@ def detect_category_matches(visible_text: str, html: str = "") -> dict[str, list
     triggered a candidate. Categories without a trigger are still represented
     in the final report as NOT_OBSERVED.
     """
-    text = f"{visible_text}\n{html}"
     matches: dict[str, list[str]] = {category_id: [] for category_id, _, _ in CATEGORY_DEFINITIONS}
     matches["DP01"] = _false_urgency(visible_text)
-    matches["DP02"] = _regex_matches(
-        text,
-        [r"checked[^>]{0,180}(?:donation|contribution|add[- ]?on|insurance|protection)",
-         r"(?:donation|contribution|add[- ]?on|insurance|protection)[^<]{0,120}checked",
-         r"optional[^\n]{0,100}(?:added|included|selected)"])
+    matches["DP02"] = _preselected_addons(html)
     matches["DP03"] = _regex_matches(
         visible_text,
         [r"(?:no|yes),?\s+i\s+(?:don't|do not|can't|cannot|won't|will not)",
-         r"(?:refuse|decline|skip)[^\n]{0,80}(?:save|benefit|smart|miss)"])
+         r"(?:refuse|decline|skip)[^\n]{0,80}(?:save|benefit|smart|miss)",
+         r"(?:don't|do not)\s+want\s+to\s+(?:save|keep|enjoy)[^\n]{0,60}(?:money|benefit|offer)"])
     matches["DP04"] = _regex_matches(
         visible_text,
         [r"(?:must|required|mandatory)\s+(?:login|log in|sign in|create an account|register)",
          r"(?:login|log in|sign in)\s+to\s+(?:continue|view|buy|see|access)",
-         r"(?:verify|enter)\s+(?:phone|email)\s+to\s+(?:continue|view|buy)"])
+         r"(?:verify|enter)\s+(?:phone|email)\s+to\s+(?:continue|view|buy)",
+         r"(?:please\s+)?(?:login|log in|sign in)\s+(?:or|to)\s+(?:continue|proceed|checkout)"])
     matches["DP05"] = _regex_matches(
         visible_text,
         [r"free\s+(?:trial|membership|delivery)[^\n]{0,100}(?:renew|cancel|billing)",
          r"(?:auto(?:matic)?[- ]?renew|recurring|renewal)[^\n]{0,100}(?:subscription|membership|trial)",
-         r"cancel(?:lation)?\s+(?:is|made|available|only)"])
+         r"cancel(?:lation)?\s+(?:is|made|available|only)",
+         r"(?:trial|membership|subscription)[^\n]{0,100}(?:charged|charge|billed|billing)\s+(?:automatically|after)"])
     matches["DP06"] = _regex_matches(
         visible_text,
-        [r"(?:most popular|recommended|best value|top pick|assured)",
+        [r"(?:recommended|best value|top pick)[^\n]{0,100}(?:selected by default|preselected)",
          r"(?:continue without|skip|not now)[^\n]{0,100}(?:membership|offer|protection)"])
     matches["DP07"] = _regex_matches(
         visible_text,
@@ -151,25 +183,28 @@ def detect_category_matches(visible_text: str, html: str = "") -> dict[str, list
          r"(?:advertised|selected|displayed)\s+(?:price|offer)[^\n]{0,100}(?:changed|different|upgrade)"])
     matches["DP08"] = _regex_matches(
         visible_text,
-        [r"(?:platform|handling|convenience|service)\s+fee",
-         r"(?:delivery|shipping)\s+(?:fee|charge)[^\n]{0,100}(?:total|checkout)",
-         r"additional\s+(?:charges?|fees?)"])
-    matches["DP09"] = _regex_matches(
-        visible_text,
-        [r"\bsponsored\b", r"\badvertisement\b", r"\bpromoted\b"])
+        [r"(?:₹|rs\.?)\s*\d[\d,.]*\s+(?:platform|handling|convenience|service)\s+fee[^\n]{0,100}(?:added|at checkout|additional)",
+         r"(?:delivery|shipping)\s+(?:fee|charge|charges?)[^\n]{0,100}(?:added|at checkout|additional)",
+         r"additional\s+(?:charges?|fees?)[^\n]{0,100}(?:checkout|order total|payable)",
+         r"(?:fee|charge)\s*(?:of|:|[-–])\s*(?:₹|rs\.?)\s*\d[\d,.]*[^\n]{0,100}(?:added|at checkout|additional)"])
+    # A visible "Sponsored" or "Advertisement" disclosure is not evidence that
+    # an ad is disguised; this text-only scanner cannot compare visual styling.
+    matches["DP09"] = []
     matches["DP10"] = _regex_matches(
         visible_text,
-        [r"(?:remind me later|enable notifications|turn on notifications)",
-         r"(?:don't miss|never miss)[^\n]{0,100}(?:update|alert|notification|offer)"])
+        [r"(?:asked|shown|prompted)\s+again[^\n]{0,100}(?:dismiss|declin|later|not now)",
+         r"(?:don't miss|never miss)[^\n]{0,100}(?:update|alert|notification|offer)[^\n]{0,100}(?:again|repeated)"])
     matches["DP11"] = _regex_matches(
         visible_text,
         [r"(?:no,?\s+i\s+don't|do not not|without not|not unsubscribe)",
          r"(?:learn more|continue)\s*(?:>|→)?\s*(?:agree|accept|subscribe)"])
     matches["DP12"] = _regex_matches(
         visible_text,
-        [r"(?:per\s+month|per\s+year|monthly|annual|yearly)\b",
+        [r"(?:per\s+month|per\s+year)\b",
          r"(?:subscription|membership)\s+(?:plan|billing|price)",
-         r"(?:auto(?:matic)?[- ]?renew|recurring)\s+(?:payment|charge|billing)"])
+         r"(?:auto(?:matic)?[- ]?renew|recurring)\s+(?:payment|charge|billing)",
+         r"(?:monthly|annual|yearly)\s+(?:subscription|membership|billing|plan)",
+         r"(?:subscription|membership)[^\n]{0,40}(?:billed|charged)\s+(?:monthly|annually|yearly)"])
     # DP13 is an explicit safety boundary. The scanner never probes or creates
     # malware behavior; therefore it is always reported as EXCLUDED_BY_SCOPE.
     return {key: list(dict.fromkeys(value)) for key, value in matches.items()}
@@ -206,6 +241,138 @@ def build_category_results(matches: dict[str, list[str]], page_url: str, screens
     return results
 
 
+def inspect_isolated_cart(
+    page,
+    output_root: Path,
+    index: int,
+    total: int,
+    timeout_ms: int,
+    on_page: Callable[[dict[str, Any], int, int], None] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    interaction: dict[str, Any] = {
+        "status": "SKIPPED",
+        "message": "No public product could be selected for the isolated cart check.",
+        "checkout_submitted": False,
+    }
+    page_record: dict[str, Any] = {
+        "url_requested": "Flipkart isolated cart check",
+        "index": index,
+        "interaction": "isolated_cart",
+    }
+    cart_record = None
+    try:
+        current_url = urlparse(page.url)
+        if "/p/" in current_url.path:
+            candidate_urls = [page.url]
+        else:
+            product_links = page.locator('a[href*="/p/"]')
+            if product_links.count() == 0:
+                page_record["status"] = "SKIPPED"
+                page_record["message"] = interaction["message"]
+                return interaction, cart_record
+            candidate_urls = []
+            for link_index in range(min(product_links.count(), 8)):
+                href = product_links.nth(link_index).get_attribute("href") or ""
+                candidate_url = urljoin(page.url, href)
+                parsed_candidate = urlparse(candidate_url)
+                if (
+                    parsed_candidate.scheme == "https"
+                    and (parsed_candidate.hostname or "").endswith(".flipkart.com")
+                    and candidate_url not in candidate_urls
+                ):
+                    candidate_urls.append(candidate_url)
+
+        product_url = ""
+        add_to_cart = None
+        for candidate_url in candidate_urls:
+            page.goto(candidate_url, wait_until="domcontentloaded", timeout=timeout_ms)
+            product_text = page.locator("body").inner_text(timeout=timeout_ms)
+            if re.search(r"\b(?:out of stock|currently unavailable|sold out)\b", product_text, re.IGNORECASE):
+                continue
+            candidate_action = page.get_by_text("Add to cart", exact=True).first
+            if candidate_action.count() > 0:
+                product_url = candidate_url
+                add_to_cart = candidate_action
+                break
+
+        if add_to_cart is None:
+            interaction["message"] = (
+                "No sampled public product was both available and exposed an Add to cart action."
+            )
+            page_record.update({"status": "SKIPPED", "message": interaction["message"]})
+            return interaction, cart_record
+
+        interaction["product_url"] = product_url
+        add_to_cart.click(timeout=min(timeout_ms, 10_000))
+        interaction["add_action_clicked"] = True
+        cart_url = "https://www.flipkart.com/viewcart"
+        page.goto(cart_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        try:
+            page.wait_for_load_state("networkidle", timeout=5_000)
+        except PlaywrightTimeoutError:
+            pass
+
+        visible_text = page.locator("body").inner_text(timeout=timeout_ms)
+        html = page.content()
+        name = f"{index:02d}-isolated-cart"
+        screenshot_path = output_root / "screenshots" / f"{name}.png"
+        html_path = output_root / "dom" / f"{name}.html"
+        text_path = output_root / "dom" / f"{name}-text.json"
+        page.screenshot(path=str(screenshot_path), full_page=True)
+        html_path.write_text(html, encoding="utf-8")
+        write_json(text_path, {"url": page.url, "title": page.title(), "visible_text": visible_text})
+        matches = detect_category_matches(visible_text, html)
+        category_results = build_category_results(
+            matches, page.url, artifact_path(screenshot_path), artifact_path(text_path)
+        )
+        cart_empty = bool(re.search(
+            r"(?:missing cart items|your cart is empty|cart is empty)",
+            visible_text,
+            re.IGNORECASE,
+        ))
+        page_record.update({
+            "url_final": page.url,
+            "title": page.title(),
+            "visible_text_characters": len(visible_text),
+            "screenshot": artifact_path(screenshot_path),
+            "dom_html": artifact_path(html_path),
+            "dom_text": artifact_path(text_path),
+            "category_results": category_results,
+        })
+        cart_record = page_record
+        interaction.update({
+            "status": "EMPTY" if cart_empty else "INSPECTED",
+            "cart_url": page.url,
+            "message": (
+                "The cart remained empty, so no cart-level controls were available to inspect."
+                if cart_empty
+                else "Inspected the isolated cart; checkout and payment were not submitted."
+            ),
+        })
+        page_record["status"] = interaction["status"]
+
+        remove_action = page.get_by_text("Remove", exact=True).first
+        if not cart_empty and remove_action.count() > 0:
+            remove_action.click(timeout=min(timeout_ms, 10_000))
+            interaction["remove_action_clicked"] = True
+        else:
+            interaction["remove_action_clicked"] = False
+            if not cart_empty:
+                interaction["status"] = "REMOVE_UNAVAILABLE"
+                page_record["status"] = interaction["status"]
+                interaction["message"] = (
+                    "A cart state was captured, but no Remove action was available. "
+                    "The temporary browser context will be discarded."
+                )
+    except Exception as exc:
+        interaction.update({"status": "ERROR", "message": f"{type(exc).__name__}: {exc}"})
+        page_record.update({"status": "ERROR", "error": interaction["message"]})
+    finally:
+        if on_page:
+            on_page(page_record, index, total)
+    return interaction, cart_record
+
+
 def scan(urls: list[str], output_root: Path, timeout_ms: int = 45_000, on_page: Callable[[dict[str, Any], int, int], None] | None = None) -> dict[str, Any]:
     output_root.mkdir(parents=True, exist_ok=True)
     screenshots = output_root / "screenshots"
@@ -215,7 +382,7 @@ def scan(urls: list[str], output_root: Path, timeout_ms: int = 45_000, on_page: 
     report: dict[str, Any] = {
         "scan": {
             "target": "https://www.flipkart.com",
-            "mode": "read-only public inspection",
+            "mode": "public-page inspection with isolated cart check",
             "taxonomy": "13-category guideline atlas",
             "started_at": datetime.now(timezone.utc).isoformat(),
             "pages_requested": len(urls),
@@ -273,7 +440,17 @@ def scan(urls: list[str], output_root: Path, timeout_ms: int = 45_000, on_page: 
                 page_record["error"] = f"{type(exc).__name__}: {exc}"
                 report["errors"].append(page_record)
             if on_page:
-                on_page(page_record, index, len(urls))
+                on_page(page_record, index, len(urls) + 1)
+
+        cart_interaction, cart_record = inspect_isolated_cart(
+            page, output_root, len(urls) + 1, len(urls) + 1, timeout_ms, on_page
+        )
+        report["cart_interaction"] = cart_interaction
+        if cart_record is not None:
+            report["pages"].append(cart_record)
+            report["findings"].extend(
+                result for result in cart_record["category_results"] if result["status"] == "POTENTIAL"
+            )
         context.close()
         browser.close()
 
@@ -292,6 +469,7 @@ def scan(urls: list[str], output_root: Path, timeout_ms: int = 45_000, on_page: 
     report["summary"] = {
         "pages_scanned": len(report["pages"]),
         "pages_requested": len(urls),
+        "cart_interaction_status": cart_interaction["status"],
         "taxonomy_categories": len(CATEGORY_DEFINITIONS),
         "potential_matches": len(report["findings"]),
         "potential_matches_by_category": potential_by_category,

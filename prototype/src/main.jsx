@@ -106,7 +106,7 @@ function App() {
       setScan((current) => ({ ...current, running: false, completed: data.completed || current.total, total: data.total || current.total, findings: data.findings || current.findings, pages: report.pages || current.pages, message: data.message, meta: { ...(current.meta || {}), finished_at: data.finished_at, summary: data.summary }, report, scanId: data.scan_id }));
       source.close();
     });
-    source.addEventListener('error', (event) => { let message = 'Live inspection API could not be reached.'; try { if (event.data) message = JSON.parse(event.data).message || message; } catch { /* native EventSource error */ } setScan((current) => { if (current.report || (current.completed >= current.total && current.total > 0)) return current; return { ...current, running: false, error: `${message} Start backend/inspection_server.py on port 5050, then reload the prototype.`, message: 'Inspection stopped.' }; }); source.close(); });
+    source.addEventListener('error', (event) => { let message = 'Live inspection API could not be reached.'; try { if (event.data) message = JSON.parse(event.data).message || message; } catch { /* native EventSource error */ } setScan((current) => { if (current.report || (current.completed >= current.total && current.total > 0)) return current; return { ...current, running: false, error: `${message} Start backend/inspection_server.py from this project, then reload the prototype.`, message: 'Inspection stopped.' }; }); source.close(); });
   };
   const startArtifactScan = async () => {
     if (!uploadFile) { setScan((current) => ({ ...current, error: 'Choose a screenshot or file before starting artifact analysis.', message: 'Upload not started.' })); return; }
@@ -133,7 +133,7 @@ function App() {
     if (path.startsWith('/results/')) return <ResultsPage targetUrl={targetUrl} scan={scan} scanId={decodeURIComponent(path.slice('/results/'.length))} />;
     if (path === '/guidelines') return <GuidelinesPage />;
     if (path === '/case-studies') return <CaseStudiesPage />;
-    if (path === '/diff') return <InteractiveDiffPage />;
+    if (path === '/diff') return <InteractiveDiffPage scan={scan} targetUrl={targetUrl} />;
     if (path === '/architecture') return <ArchitecturePage />;
     return <OverviewPage targetUrl={targetUrl} scan={scan} />;
   }, [path, targetUrl, scan]);
@@ -190,10 +190,17 @@ function PatternAtlas({ compact = false }) {
 }
 
 function InspectionPage({ targetUrl, setTargetUrl, scan, startInspection, uploadFile, setUploadFile, startArtifactScan }) {
-  const visibleFindings = scan.findings.length ? scan.findings : (scan.completed ? FALLBACK_FINDINGS.slice(0, scan.completed) : []);
   const inspectedPages = scan.pages || [];
   const progress = scan.total ? Math.min(100, (scan.completed / scan.total) * 100) : 0;
-  const flipkartMode = scan.meta?.mode === 'Flipkart 13-category read-only scan' || /(^|\.)flipkart\.com$/i.test((new URL(targetUrl || DEFAULT_TARGET).hostname || ''));
+  const flipkartMode = scan.meta?.mode === 'Flipkart 13-category scan with isolated cart check' || /(^|\.)flipkart\.com$/i.test((new URL(targetUrl || DEFAULT_TARGET).hostname || ''));
+  const localDemo = /^http:\/\/(?:localhost|127\.0\.0\.1):3000(?:\/|$)/i.test(targetUrl || DEFAULT_TARGET);
+  const visibleFindings = scan.report
+    ? (scan.report.findings || [])
+    : scan.findings.length
+      ? scan.findings
+      : localDemo && scan.completed
+        ? FALLBACK_FINDINGS.slice(0, scan.completed)
+        : [];
   const pipeline = PIPELINE_STAGES.map(([number, title, copy], index) => ({ number, title, copy, done: scan.completed >= index + 1, active: scan.running && scan.completed === index }));
   return <div className="page-wrap inspection-page"><div className="breadcrumb">Home <span>/</span> Inspect</div><PageIntro eyebrow="LIVE INSPECTION CONSOLE" title="Inspect a separate website." copy={flipkartMode ? "Flipkart mode runs six public pages through all 13 categories and returns read-only evidence." : "Enter the normal demo-site URL below. ShadowBait will pass it to the shared Playwright pipeline and return a traceable evidence package."} actions={<><button className="primary-cta" onClick={startInspection} disabled={scan.running}>{scan.running ? 'INSPECTION RUNNING…' : scan.completed ? 'RUN INSPECTION AGAIN' : 'START INSPECTION'} <span>→</span></button>{scan.completed > 0 && !scan.running && <button className="secondary-cta" onClick={() => navigate(`/results/${encodeURIComponent(scan.scanId)}`)}>OPEN RESULTS</button>}</>} />{scan.error && <div className="inspection-error">{scan.error}</div>}<section className="target-card"><div><label htmlFor="target-url">TARGET WEBSITE URL</label><input id="target-url" value={targetUrl} onChange={(event) => setTargetUrl(event.target.value)} placeholder="https://www.flipkart.com/" onKeyDown={(event) => { if (event.key === 'Enter') startInspection(); }} /><small>{flipkartMode ? "Flipkart mode: 6 public pages · 13 categories · read-only evidence" : "Demo target: https://your-demo-site.example · Local: http://127.0.0.1:3000"}</small></div><div className="target-ready"><span>●</span>{scan.running ? 'SCANNING TARGET' : 'READY TO SCAN'}</div></section><section className="artifact-input-card"><div><span className="eyebrow">SECOND INPUT · SCREENSHOT OR FILE</span><h2>Analyze an artifact</h2><p>Upload a screenshot for OCR-based signals, or HTML, text, JSON, Markdown, or PDF for content analysis. The artifact is kept as evidence.</p></div><div className="artifact-input-actions"><input id="artifact-upload" type="file" accept="image/*,.html,.htm,.txt,.md,.json,.csv,.pdf" onChange={(event) => setUploadFile(event.target.files?.[0] || null)} /><button className="secondary-cta" onClick={startArtifactScan} disabled={scan.running || !uploadFile}>{uploadFile ? `ANALYZE ${uploadFile.name}` : "CHOOSE A FILE"} <span>→</span></button></div></section><div className="inspection-note"><strong>{flipkartMode ? "Flipkart coverage." : "Inspection scope."}</strong><span>{flipkartMode ? "Six public pages are evaluated across all 13 categories; potential matches remain subject to human review." : "Evidence is captured before interpretation."}</span></div><section className="inspection-status"><div className="status-copy"><span className={scan.running ? 'live-dot running' : 'live-dot'} />{scan.message}</div><div className="progress-track"><span style={{ width: `${progress}%` }} /></div><strong>{scan.completed}/{scan.total}</strong></section><div className="inspection-meta">{scan.meta && <><span>SCAN {scan.meta.scan_id}</span><span>{scan.meta.browser} · {scan.meta.viewport?.width}×{scan.meta.viewport?.height}</span><span>TARGET {scan.meta.target}</span></>}{scan.scanId && !scan.running && <button className="text-link" onClick={() => navigate('/inspect')}>RESET ACTIVE RUN</button>}</div><section className="panel pages-panel"><div className="section-heading"><div><span className="eyebrow">PAGES INSPECTED</span><h2>Live page trail</h2></div><span className="result-count">{inspectedPages.length}/{scan.total}</span></div>{inspectedPages.length === 0 ? <div className="empty-inspection"><strong>No page captured yet.</strong><p>Each Flipkart page will appear here immediately after its browser capture completes.</p></div> : <div className="page-trail">{inspectedPages.map((page) => <div className="page-trail-row" key={page.url || page.url_final}><span className="pipeline-number">{page.status === "ERROR" ? "!" : "✓"}</span><div><strong>{page.title || "Untitled page"}</strong><small>{page.url || page.url_final}</small></div><span className="pipeline-state">{page.status || "INSPECTED"}</span></div>)}</div>}</section><section className="console-grid"><article className="panel pipeline-panel"><div className="section-heading"><div><span className="eyebrow">LIVE EVENT LOG</span><h2>Inspection pipeline</h2></div><span className="scan-badge">{scan.running ? 'LIVE' : scan.completed ? 'SAVED' : 'IDLE'}</span></div><div className="pipeline-list">{pipeline.map((stage) => <div key={stage.number} className={`pipeline-row ${stage.done ? 'done' : ''} ${stage.active ? 'active' : ''}`}><span className="pipeline-number">{stage.done ? '✓' : stage.number}</span><div><strong>{stage.title}</strong><small>{stage.copy}</small></div><span className="pipeline-state">{stage.done ? 'DONE' : stage.active ? 'NOW' : 'QUEUED'}</span></div>)}</div></article><article className="panel evidence-panel"><div className="section-heading"><div><span className="eyebrow">CAPTURED EVIDENCE</span><h2>What the inspector saw</h2></div><span className="result-count">{visibleFindings.length} findings</span></div>{visibleFindings.length === 0 ? <div className="empty-inspection"><strong>Your evidence cards will appear here.</strong><p>Start the inspection to watch ShadowBait capture screenshots and selectors from the target website.</p></div> : <div className="evidence-grid">{visibleFindings.map((finding) => <EvidenceCard finding={finding} key={finding.id} />)}</div>}</article></section><div className="inspection-note"><strong>Separation boundary:</strong> The target website demonstrates the interface. ShadowBait owns the evidence, analysis, customer impact, and ethical alternative.</div></div>;
 }
@@ -210,7 +217,7 @@ function ResultsPage({ targetUrl, scan, scanId }) {
   const risk = report?.risk || {};
   const riskLevel = risk.risk_level || summary.risk_level || 'REVIEW';
   const score = risk.risk_score ?? summary.risk_score ?? '—';
-  return <div className="page-wrap results-page"><div className="breadcrumb">Home <span>/</span> Evidence <span>/</span> {scanId}</div><PageIntro eyebrow="SAVED INSPECTION RESULT" title="Evidence, explained." copy="This result keeps the target, screenshots, classifications, risk score, customer impact, and ethical alternatives together for review." actions={<><button className="primary-cta" onClick={() => downloadJson(report || { scan: { target: targetUrl }, findings, summary })}>DOWNLOAD JSON <span>↓</span></button><button className="secondary-cta" onClick={() => navigate('/diff')}>OPEN INTERACTIVE DIFF</button></>} /><section className="result-summary"><div><span className="eyebrow">TARGET WEBSITE</span><strong>{report?.scan?.target || targetUrl}</strong><small>{report?.scan?.finished_at || scan.meta?.finished_at || 'Live result'}</small></div><div className={`risk-orb ${typeof score === 'number' ? 'scored' : 'unscored'}`}><span>OVERALL RISK</span><strong>{typeof score === 'number' ? riskLevel : 'NOT SCORED'}</strong><em>{typeof score === 'number' ? `${score.toFixed(1)} points` : 'Run an inspection first'}</em></div></section><section className="results-kpis"><Kpi label="CAPTURED" value={summary.verified_findings ?? findings.length} note="browser findings" /><Kpi label="M2 CLASSIFIED" value={summary.m2_verified_findings ?? 0} note="language findings" /><Kpi label="HIGH SEVERITY" value={summary.high_severity_findings ?? 0} note="items for review" /><Kpi label="MAPPED" value={summary.compliance_mapped_findings ?? report?.compliance?.mapped_findings ?? 0} note="technical mappings" /></section><section className="impact-banner"><div><span className="eyebrow">CUSTOMER IMPACT LENS</span><h2>What changed for the person on the other side of the screen?</h2></div><p>Every finding should answer more than “what is this pattern?” It should show the decision pressure, cost, confusion, or commitment it can create.</p></section><section className="results-evidence"><div className="section-heading"><div><span className="eyebrow">EVIDENCE LEDGER</span><h2>Every captured finding</h2></div><span className="result-count">{findings.length} findings</span></div><div className="results-list">{findings.map((finding) => <EvidenceCard finding={finding} key={finding.id} />)}</div></section><div className="overview-note"><strong>Review boundary.</strong><span>Risk and compliance values are explainable prototype outputs. They support human review and do not determine legal liability.</span></div></div>;
+  return <div className="page-wrap results-page"><div className="breadcrumb">Home <span>/</span> Evidence <span>/</span> {scanId}</div><PageIntro eyebrow="SAVED INSPECTION RESULT" title="Evidence, explained." copy="This result keeps the target, screenshots, classifications, risk score, customer impact, and ethical alternatives together for review." actions={<><button className="primary-cta" onClick={() => downloadJson(report || { scan: { target: targetUrl }, findings, summary })}>DOWNLOAD JSON <span>↓</span></button><button className="secondary-cta" onClick={() => navigate('/diff')}>OPEN INTERACTIVE DIFF</button></>} /><section className="result-summary"><div><span className="eyebrow">TARGET WEBSITE</span><strong>{report?.scan?.target || targetUrl}</strong><small>{report?.scan?.finished_at || scan.meta?.finished_at || 'Live result'}</small></div><div className={`risk-orb ${typeof score === 'number' ? 'scored' : 'unscored'}`}><span>OVERALL RISK</span><strong>{typeof score === 'number' ? riskLevel : 'NOT SCORED'}</strong><em>{typeof score === 'number' ? `${score.toFixed(1)} points` : 'Run an inspection first'}</em></div></section>{report?.scan?.inspection_status && report.scan.inspection_status !== 'INSPECTED' && <div className="inspection-note"><strong>{report.scan.inspection_status} · HTTP {report.scan.http_status ?? 'status unavailable'}</strong><span>{report.scan.message}</span></div>}<section className="results-kpis"><Kpi label="CAPTURED" value={summary.captured_findings ?? summary.verified_findings ?? findings.length} note="evidence-backed candidates" /><Kpi label="M2 CLASSIFIED" value={summary.m2_classified_findings ?? summary.m2_verified_findings ?? 0} note="language findings" /><Kpi label="HIGH SEVERITY" value={summary.high_severity_findings ?? 0} note="items for review" /><Kpi label="MAPPED" value={summary.compliance_mapped_findings ?? report?.compliance?.mapped_findings ?? 0} note="technical mappings" /></section><section className="impact-banner"><div><span className="eyebrow">CUSTOMER IMPACT LENS</span><h2>What changed for the person on the other side of the screen?</h2></div><p>Every finding should answer more than “what is this pattern?” It should show the decision pressure, cost, confusion, or commitment it can create.</p></section><section className="results-evidence"><div className="section-heading"><div><span className="eyebrow">EVIDENCE LEDGER</span><h2>Every captured finding</h2></div><span className="result-count">{findings.length} findings</span></div>{findings.length === 0 && report?.scan?.message && <div className="empty-inspection"><strong>No findings were produced for this scan.</strong><p>{report.scan.message}</p></div>}<div className="results-list">{findings.map((finding) => <EvidenceCard finding={finding} key={`${finding.id}-${finding.route}`} />)}</div></section><div className="overview-note"><strong>Review boundary.</strong><span>Risk and compliance values are explainable prototype outputs. They support human review and do not determine legal liability.</span></div></div>;
 }
 
 function Kpi({ label, value, note }) { return <div className="kpi"><span className="eyebrow">{label}</span><strong>{value}</strong><small>{note}</small></div>; }
@@ -224,7 +231,75 @@ function GuidelinesPage() {
 
 function CaseStudiesPage() { return <div className="page-wrap case-studies-page"><div className="breadcrumb">Home <span>/</span> Case Studies</div><PageIntro eyebrow="DOCUMENTED CONSEQUENCES" title="The patterns have a paper trail." copy="A stronger review does not stop at naming a pattern. It connects the interface to a public record, a measurable customer cost, and a design decision a team can change." /><section className="case-stat-grid"><div><strong>$2.5B</strong><span>Amazon Prime settlement</span></div><div><strong>35M</strong><span>estimated consumers in redress figure</span></div><div><strong>$245M</strong><span>Epic consumer refunds</span></div><div><strong>$100M</strong><span>Vonage refunds</span></div></section><div className="case-grid">{CASE_STUDIES.map((item) => <article className="case-card" key={item.title}><div className={`case-visual ${item.accent}`}><img src={item.image} alt={`${item.title} source visual`} /><span>{item.stat}</span><small>{item.label}</small></div><span className="case-label">{item.label}</span><h2>{item.title}</h2><span className="case-pattern">{item.pattern}</span><p>{item.summary}</p><div className="case-metric"><strong>{item.stat}</strong><span>{item.statLabel}</span><small>{item.detail}</small></div><a href={item.source} target="_blank" rel="noreferrer">Read the official source ↗</a></article>)}</div><div className="case-disclaimer"><strong>Presentation wording:</strong><span>Say “the regulator alleged” for complaints, “the order required” for finalized orders, and “the report describes” for broader research findings. Figures are shown with their source dates.</span></div></div>; }
 
-function InteractiveDiffPage() { const [selected, setSelected] = useState(FALLBACK_FINDINGS[0]); return <div className="page-wrap diff-page"><div className="breadcrumb">Home <span>/</span> Interactive Diff</div><PageIntro eyebrow="ORIGINAL STATE → ETHICAL ALTERNATIVE" title="Make the customer impact visible." copy="The diff is not just a visual makeover. It connects an observed interface choice to the customer pressure it creates and the clearer alternative a team can implement." /><div className="diff-shell"><aside className="diff-sidebar"><span className="eyebrow">SELECT A FINDING</span>{FALLBACK_FINDINGS.map((finding) => <button className={selected.id === finding.id ? 'selected' : ''} onClick={() => setSelected(finding)} key={finding.id}><span>{finding.id}</span><strong>{finding.name}</strong></button>)}</aside><section className="diff-main"><div className="diff-heading"><div><span className="case-pattern">{selected.category}</span><h2>{selected.name}</h2><p>{selected.evidence}</p></div><span className="risk-pill">CUSTOMER IMPACT</span></div><div className="diff-panels"><article className="diff-panel before"><span className="panel-label">CAPTURED STATE</span><div className="mock-browser"><div className="mock-top"><i /><i /><i /></div><div className="mock-content"><div className="mock-title">{selected.name === 'False Urgency' ? 'Only 2 left' : selected.name === 'Basket Sneaking' ? 'Order options' : selected.name}</div><div className="mock-alert">{selected.evidence}</div><div className="mock-button muted">Continue</div></div></div><p><strong>Pressure created:</strong> {selected.harm}</p></article><div className="diff-arrow">→</div><article className="diff-panel after"><span className="panel-label">ETHICAL ALTERNATIVE</span><div className="mock-browser ethical"><div className="mock-top"><i /><i /><i /></div><div className="mock-content"><div className="mock-title">Clear choice</div><div className="mock-alert calm">{selected.fix}</div><div className="mock-button">Continue</div></div></div><p><strong>Customer benefit:</strong> The person can understand the consequence and choose without pressure.</p></article></div><div className="diff-principle"><span className="eyebrow">DESIGN PRINCIPLE</span><strong>Make the honest choice as easy to understand as the persuasive one.</strong></div></section></div></div>; }
+function InteractiveDiffPage({ scan, targetUrl }) {
+  const flipkartTarget = /(^|\.)flipkart\.com$/i.test(new URL(targetUrl || DEFAULT_TARGET).hostname || '');
+  const hasLiveReport = Boolean(scan.report);
+  const findings = hasLiveReport
+    ? (scan.report.findings || [])
+    : flipkartTarget
+      ? []
+      : FALLBACK_FINDINGS;
+  const [selectedKey, setSelectedKey] = useState('');
+  const findingKey = (finding, index) => `${finding.id}-${finding.route}-${index}`;
+  const selectedIndex = findings.findIndex((finding, index) => findingKey(finding, index) === selectedKey);
+  const selected = findings[selectedIndex >= 0 ? selectedIndex : 0];
+
+  return <div className="page-wrap diff-page">
+    <div className="breadcrumb">Home <span>/</span> Interactive Diff</div>
+    <PageIntro
+      eyebrow="CAPTURED STATE → ETHICAL ALTERNATIVE"
+      title={hasLiveReport ? "Compare captured evidence with a clearer alternative." : "Make the customer impact visible."}
+      copy={hasLiveReport
+        ? "This view uses evidence captured in your latest inspection. Heuristic candidates require human review and are not confirmed violations."
+        : "The diff connects an observed interface choice to its customer impact and a clearer alternative."}
+    />
+    {findings.length === 0
+      ? <section className="panel empty-inspection">
+        <strong>{scan.report?.scan?.inspection_status === 'NO_CONTENT'
+          ? "The website returned no visible page content."
+          : scan.report?.scan?.inspection_status === 'BLOCKED'
+            ? "The website blocked this inspection."
+            : flipkartTarget ? "No Flipkart evidence to compare yet." : "No captured findings yet."}</strong>
+        <p>{scan.report?.scan?.message || (flipkartTarget
+          ? "Run a Flipkart inspection first. The diff will use only evidence-backed findings from that scan."
+          : "Start an inspection to populate the diff with captured findings.")}</p>
+        <button className="primary-cta" onClick={() => navigate('/inspect')}>OPEN INSPECTION <span>→</span></button>
+      </section>
+      : <div className="diff-shell">
+        <aside className="diff-sidebar">
+          <span className="eyebrow">SELECT A FINDING</span>
+          {findings.map((finding, index) => <button
+            className={(selectedIndex >= 0 ? selectedIndex : 0) === index ? 'selected' : ''}
+            onClick={() => setSelectedKey(findingKey(finding, index))}
+            key={findingKey(finding, index)}
+          ><span>{finding.id}</span><strong>{finding.name}</strong></button>)}
+        </aside>
+        {selected && <section className="diff-main">
+          <div className="diff-heading">
+            <div><span className="case-pattern">{selected.category || selected.compliance?.principle || 'Captured evidence'}</span><h2>{selected.name}</h2><p>{selected.observed_text || selected.evidence}</p></div>
+            <span className="risk-pill">{selected.m2_findings?.length ? 'LANGUAGE CLASSIFIED' : 'HUMAN REVIEW'}</span>
+          </div>
+          <div className="diff-panels">
+            <article className="diff-panel before">
+              <span className="panel-label">CAPTURED STATE · {selected.route || 'DEMO EVIDENCE'}</span>
+              {selected.screenshot
+                ? <img className="live-diff-screenshot" src={selected.screenshot} alt={`Captured ${selected.name} evidence`} />
+                : <div className="mock-browser"><div className="mock-top"><i /><i /><i /></div><div className="mock-content"><div className="mock-title">{selected.name === 'False Urgency' ? 'Only 2 left' : selected.name}</div><div className="mock-alert">{selected.observed_text || selected.evidence}</div><div className="mock-button muted">Captured choice</div></div></div>}
+              <p><strong>Customer impact:</strong> {selected.harm}</p>
+              {selected.compliance && <p><strong>Heuristic mapping:</strong> {selected.compliance.principle}</p>}
+            </article>
+            <div className="diff-arrow">→</div>
+            <article className="diff-panel after">
+              <span className="panel-label">ETHICAL ALTERNATIVE</span>
+              <div className="mock-browser ethical"><div className="mock-top"><i /><i /><i /></div><div className="mock-content"><div className="mock-title">Clear choice</div><div className="mock-alert calm">{selected.compliance?.recommendation || selected.fix || 'Make the choice and its consequences clear, neutral, and easy to review.'}</div><div className="mock-button">Continue</div></div></div>
+              <p><strong>Review status:</strong> {selected.m2_status || 'Heuristic candidate; requires human review.'}</p>
+            </article>
+          </div>
+          <div className="diff-principle"><span className="eyebrow">DESIGN PRINCIPLE</span><strong>{selected.compliance?.principle || 'Make the honest choice as easy to understand as the persuasive one.'}</strong></div>
+        </section>}
+      </div>}
+  </div>;
+}
 
 function ArchitecturePage() {
   const steps = [
