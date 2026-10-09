@@ -149,6 +149,18 @@ class ScanDatabase:
                         ),
                     )
 
+    def get_report(self, scan_id: str) -> dict[str, Any] | None:
+        """Return the durable report payload for refresh-safe API reads."""
+        with self._lock, self._connect() as db:
+            row = db.execute("SELECT report_json FROM scans WHERE id = ?", (scan_id,)).fetchone()
+        if row is None or not row["report_json"]:
+            return None
+        try:
+            report = json.loads(row["report_json"])
+        except (TypeError, json.JSONDecodeError):
+            return None
+        return report if isinstance(report, dict) else None
+
     def get_scan(self, scan_id: str) -> dict[str, Any] | None:
         with self._lock, self._connect() as db:
             row = db.execute("SELECT * FROM scans WHERE id = ?", (scan_id,)).fetchone()

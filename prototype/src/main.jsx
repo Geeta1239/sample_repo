@@ -12,16 +12,6 @@ const PIPELINE_STAGES = [
   ['05', 'Report persisted', 'SQLite + JSON artifacts'],
 ];
 
-const FALLBACK_FINDINGS = [
-  { id: 'DP01', name: 'False Urgency', route: '/product', selector: '#scarcity-text', evidence: '“ONLY 2 LEFT!” appears beside a countdown timer.', harm: 'Pressures customers to buy before comparing options or verifying the claim.', fix: 'Show truthful stock and a fixed, clearly stated offer end time.', category: 'Pressure' },
-  { id: 'DP02', name: 'Basket Sneaking', route: '/checkout', selector: '#donation', evidence: 'Optional ₹50 contribution starts checked.', harm: 'Adds an optional charge without an explicit affirmative choice.', fix: 'Start optional add-ons unchecked and explain them plainly.', category: 'Consent' },
-  { id: 'DP03', name: 'Confirm Shaming', route: '/checkout', selector: '#confirm-shaming', evidence: '“No, I don’t want to save money.”', harm: 'Uses guilt to steer customers toward an optional transaction.', fix: 'Use neutral choices that describe the result of each action.', category: 'Language' },
-  { id: 'DP05', name: 'Subscription Trap', route: '/subscribe', selector: '[data-ccpa-pattern="SUBSCRIPTION_TRAP"]', evidence: 'Automatic renewal is selected and cancellation is routed elsewhere.', harm: 'Makes recurring billing easier to start than to stop.', fix: 'Offer cancellation with the same visibility and simplicity as sign-up.', category: 'Commitment' },
-  { id: 'DP06', name: 'Interface Interference', route: '/interface-interference', selector: '[data-ccpa-pattern="INTERFACE_INTERFERENCE"]', evidence: 'Recommended plan is prominent while the basic choice is visually muted.', harm: 'Obscures the customer’s lower-commitment choice through visual hierarchy.', fix: 'Give consequential choices equal prominence and clarity.', category: 'Choice' },
-  { id: 'DP07', name: 'Bait and Switch', route: '/bait-switch', selector: '#bait-switch-status', evidence: 'A selected offer changes state at the final step.', harm: 'Wastes time and redirects purchase intent toward a more expensive outcome.', fix: 'Keep the advertised outcome available or disclose changes immediately.', category: 'Expectation' },
-  { id: 'DP08', name: 'Drip Pricing', route: '/checkout', selector: '[data-ccpa-pattern="DRIP_PRICING"]', evidence: 'Delivery, platform, and handling fees appear later in checkout.', harm: 'Delays accurate price comparison until late in the journey.', fix: 'Show the complete payable estimate beside the product price.', category: 'Transparency' },
-];
-
 const CASE_STUDIES = [
   { label: 'FTC · September 2025 order', title: 'Amazon Prime enrollment and cancellation', pattern: 'Subscription Trap · Interface Interference', summary: 'The FTC said Amazon enrolled millions of consumers without consent and made Prime cancellation exceedingly difficult. The finalized settlement requires changes to both enrollment and cancellation.', stat: '$2.5B', statLabel: 'historic settlement', detail: '$1B civil penalty + $1.5B redress for an estimated 35M consumers', source: 'https://www.ftc.gov/news-events/news/press-releases/2025/09/ftc-secures-historic-25-billion-settlement-against-amazon', image: '/assets/cases/amazon-prime-settlement.jpg', accent: 'amazon' },
   { label: 'FTC · March 2023 finalized order', title: 'Epic Games / Fortnite unwanted charges', pattern: 'Basket Sneaking · Trick Question', summary: 'The FTC finalized an order requiring Epic Games to pay consumers over allegations that confusing controls and dark patterns caused unwanted in-game purchases, including purchases by children without parental consent.', stat: '$245M', statLabel: 'consumer refunds', detail: 'The order bars charging through dark patterns without affirmative consent', source: 'https://www.ftc.gov/news-events/news/press-releases/2023/03/ftc-finalizes-order-requiring-fortnite-maker-epic-games-pay-245-million-tricking-users-making', image: '/assets/cases/epic-dark-pattern.jpg', accent: 'epic' },
@@ -53,6 +43,13 @@ function normalizeTarget(value) {
   return parsed.toString().replace(/\/$/, '');
 }
 
+function hostnameFor(value) {
+  try { return new URL(value || DEFAULT_TARGET).hostname || ''; } catch { return ''; }
+}
+function isFlipkartTarget(value) {
+  return /(^|\.)flipkart\.com$/i.test(hostnameFor(value));
+}
+
 function navigate(path) {
   window.history.pushState({}, '', path);
   window.dispatchEvent(new PopStateEvent('popstate'));
@@ -63,7 +60,7 @@ function App() {
   const [path, setPath] = useState(window.location.pathname || '/');
   const [darkMode, setDarkMode] = useState(() => window.localStorage.getItem('shadowbait-theme') === 'dark');
   const [targetUrl, setTargetUrl] = useState(() => window.localStorage.getItem('shadowbait-target-url') || DEFAULT_TARGET);
-  const [scan, setScan] = useState({ running: false, completed: 0, total: FALLBACK_FINDINGS.length, findings: [], pages: [], message: 'Ready — enter a target website URL to begin.', error: '', meta: null, report: null, scanId: '' });
+  const [scan, setScan] = useState({ running: false, completed: 0, total: 0, findings: [], pages: [], message: 'Ready — enter a target website URL to begin.', error: '', meta: null, report: null, scanId: '' });
   const [uploadFile, setUploadFile] = useState(null);
   const eventSourceRef = useRef(null);
 
@@ -89,7 +86,7 @@ function App() {
     }
     window.localStorage.setItem('shadowbait-target-url', normalized);
     eventSourceRef.current?.close();
-    setScan({ running: true, completed: 0, total: FALLBACK_FINDINGS.length, findings: [], pages: [], message: 'Connecting to the inspection API…', error: '', meta: null, report: null, scanId: '' });
+    setScan({ running: true, completed: 0, total: 0, findings: [], pages: [], message: 'Connecting to the inspection API…', error: '', meta: null, report: null, scanId: '' });
     navigate('/inspect');
     const configuredApi = window.localStorage.getItem('shadowbait-inspection-api') || '';
     const source = new EventSource(`${configuredApi}/api/inspection/stream?target=${encodeURIComponent(normalized)}`);
@@ -126,7 +123,7 @@ function App() {
     reader.readAsDataURL(uploadFile);
   };
 
-  const resetInspection = () => { eventSourceRef.current?.close(); setScan({ running: false, completed: 0, total: FALLBACK_FINDINGS.length, findings: [], pages: [], message: 'Ready — enter a target website URL to begin.', error: '', meta: null, report: null, scanId: '' }); navigate('/inspect'); };
+  const resetInspection = () => { eventSourceRef.current?.close(); setScan({ running: false, completed: 0, total: 0, findings: [], pages: [], message: 'Ready — enter a target website URL to begin.', error: '', meta: null, report: null, scanId: '' }); navigate('/inspect'); };
 
   const page = useMemo(() => {
     if (path === '/inspect') return <InspectionPage targetUrl={targetUrl} setTargetUrl={setTargetUrl} scan={scan} startInspection={startInspection} uploadFile={uploadFile} setUploadFile={setUploadFile} startArtifactScan={startArtifactScan} />;
@@ -136,7 +133,7 @@ function App() {
     if (path === '/diff') return <InteractiveDiffPage scan={scan} targetUrl={targetUrl} />;
     if (path === '/architecture') return <ArchitecturePage />;
     return <OverviewPage targetUrl={targetUrl} scan={scan} />;
-  }, [path, targetUrl, scan]);
+  }, [path, targetUrl, scan, uploadFile]);
 
   return <div className="prototype-shell">
     <div className="demo-ribbon"><strong>SHADOWBAIT PLATFORM</strong><span>Evidence-first website auditing for responsible product teams</span></div>
@@ -192,14 +189,14 @@ function PatternAtlas({ compact = false }) {
 function InspectionPage({ targetUrl, setTargetUrl, scan, startInspection, uploadFile, setUploadFile, startArtifactScan }) {
   const inspectedPages = scan.pages || [];
   const progress = scan.total ? Math.min(100, (scan.completed / scan.total) * 100) : 0;
-  const flipkartMode = scan.meta?.mode === 'Flipkart 13-category scan with isolated cart check' || /(^|\.)flipkart\.com$/i.test((new URL(targetUrl || DEFAULT_TARGET).hostname || ''));
+  const flipkartMode = scan.meta?.mode === 'Flipkart 13-category scan with isolated cart check' || isFlipkartTarget(targetUrl);
   const localDemo = /^http:\/\/(?:localhost|127\.0\.0\.1):3000(?:\/|$)/i.test(targetUrl || DEFAULT_TARGET);
   const visibleFindings = scan.report
     ? (scan.report.findings || [])
     : scan.findings.length
       ? scan.findings
       : localDemo && scan.completed
-        ? FALLBACK_FINDINGS.slice(0, scan.completed)
+        ? []
         : [];
   const pipeline = PIPELINE_STAGES.map(([number, title, copy], index) => ({ number, title, copy, done: scan.completed >= index + 1, active: scan.running && scan.completed === index }));
   return <div className="page-wrap inspection-page"><div className="breadcrumb">Home <span>/</span> Inspect</div><PageIntro eyebrow="LIVE INSPECTION CONSOLE" title="Inspect a separate website." copy={flipkartMode ? "Flipkart mode runs six public pages through all 13 categories and returns read-only evidence." : "Enter the normal demo-site URL below. ShadowBait will pass it to the shared Playwright pipeline and return a traceable evidence package."} actions={<><button className="primary-cta" onClick={startInspection} disabled={scan.running}>{scan.running ? 'INSPECTION RUNNING…' : scan.completed ? 'RUN INSPECTION AGAIN' : 'START INSPECTION'} <span>→</span></button>{scan.completed > 0 && !scan.running && <button className="secondary-cta" onClick={() => navigate(`/results/${encodeURIComponent(scan.scanId)}`)}>OPEN RESULTS</button>}</>} />{scan.error && <div className="inspection-error">{scan.error}</div>}<section className="target-card"><div><label htmlFor="target-url">TARGET WEBSITE URL</label><input id="target-url" value={targetUrl} onChange={(event) => setTargetUrl(event.target.value)} placeholder="https://www.flipkart.com/" onKeyDown={(event) => { if (event.key === 'Enter') startInspection(); }} /><small>{flipkartMode ? "Flipkart mode: 6 public pages · 13 categories · read-only evidence" : "Demo target: https://your-demo-site.example · Local: http://127.0.0.1:3000"}</small></div><div className="target-ready"><span>●</span>{scan.running ? 'SCANNING TARGET' : 'READY TO SCAN'}</div></section><section className="artifact-input-card"><div><span className="eyebrow">SECOND INPUT · SCREENSHOT OR FILE</span><h2>Analyze an artifact</h2><p>Upload a screenshot for OCR-based signals, or HTML, text, JSON, Markdown, or PDF for content analysis. The artifact is kept as evidence.</p></div><div className="artifact-input-actions"><input id="artifact-upload" type="file" accept="image/*,.html,.htm,.txt,.md,.json,.csv,.pdf" onChange={(event) => setUploadFile(event.target.files?.[0] || null)} /><button className="secondary-cta" onClick={startArtifactScan} disabled={scan.running || !uploadFile}>{uploadFile ? `ANALYZE ${uploadFile.name}` : "CHOOSE A FILE"} <span>→</span></button></div></section><div className="inspection-note"><strong>{flipkartMode ? "Flipkart coverage." : "Inspection scope."}</strong><span>{flipkartMode ? "Six public pages are evaluated across all 13 categories; potential matches remain subject to human review." : "Evidence is captured before interpretation."}</span></div><section className="inspection-status"><div className="status-copy"><span className={scan.running ? 'live-dot running' : 'live-dot'} />{scan.message}</div><div className="progress-track"><span style={{ width: `${progress}%` }} /></div><strong>{scan.completed}/{scan.total}</strong></section><div className="inspection-meta">{scan.meta && <><span>SCAN {scan.meta.scan_id}</span><span>{scan.meta.browser} · {scan.meta.viewport?.width}×{scan.meta.viewport?.height}</span><span>TARGET {scan.meta.target}</span></>}{scan.scanId && !scan.running && <button className="text-link" onClick={() => navigate('/inspect')}>RESET ACTIVE RUN</button>}</div><section className="panel pages-panel"><div className="section-heading"><div><span className="eyebrow">PAGES INSPECTED</span><h2>Live page trail</h2></div><span className="result-count">{inspectedPages.length}/{scan.total}</span></div>{inspectedPages.length === 0 ? <div className="empty-inspection"><strong>No page captured yet.</strong><p>Each Flipkart page will appear here immediately after its browser capture completes.</p></div> : <div className="page-trail">{inspectedPages.map((page) => <div className="page-trail-row" key={page.url || page.url_final}><span className="pipeline-number">{page.status === "ERROR" ? "!" : "✓"}</span><div><strong>{page.title || "Untitled page"}</strong><small>{page.url || page.url_final}</small></div><span className="pipeline-state">{page.status || "INSPECTED"}</span></div>)}</div>}</section><section className="console-grid"><article className="panel pipeline-panel"><div className="section-heading"><div><span className="eyebrow">LIVE EVENT LOG</span><h2>Inspection pipeline</h2></div><span className="scan-badge">{scan.running ? 'LIVE' : scan.completed ? 'SAVED' : 'IDLE'}</span></div><div className="pipeline-list">{pipeline.map((stage) => <div key={stage.number} className={`pipeline-row ${stage.done ? 'done' : ''} ${stage.active ? 'active' : ''}`}><span className="pipeline-number">{stage.done ? '✓' : stage.number}</span><div><strong>{stage.title}</strong><small>{stage.copy}</small></div><span className="pipeline-state">{stage.done ? 'DONE' : stage.active ? 'NOW' : 'QUEUED'}</span></div>)}</div></article><article className="panel evidence-panel"><div className="section-heading"><div><span className="eyebrow">CAPTURED EVIDENCE</span><h2>What the inspector saw</h2></div><span className="result-count">{visibleFindings.length} findings</span></div>{visibleFindings.length === 0 ? <div className="empty-inspection"><strong>Your evidence cards will appear here.</strong><p>Start the inspection to watch ShadowBait capture screenshots and selectors from the target website.</p></div> : <div className="evidence-grid">{visibleFindings.map((finding) => <EvidenceCard finding={finding} key={finding.id} />)}</div>}</article></section><div className="inspection-note"><strong>Separation boundary:</strong> The target website demonstrates the interface. ShadowBait owns the evidence, analysis, customer impact, and ethical alternative.</div></div>;
@@ -211,13 +208,34 @@ function EvidenceCard({ finding }) {
 }
 
 function ResultsPage({ targetUrl, scan, scanId }) {
-  const report = scan.report;
-  const findings = report?.findings || scan.findings || [];
-  const summary = report?.summary || scan.meta?.summary || {};
+  const [persistedReport, setPersistedReport] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const report = scan.report?.scan?.scan_id === scanId || scan.scanId === scanId
+    ? scan.report
+    : persistedReport;
+  useEffect(() => {
+    let cancelled = false;
+    if (scan.report?.scan?.scan_id === scanId || scan.scanId === scanId) {
+      setPersistedReport(scan.report);
+      return undefined;
+    }
+    setLoading(true);
+    setLoadError('');
+    const apiRoot = window.localStorage.getItem('shadowbait-inspection-api') || '';
+    fetch(`${apiRoot}/api/scans/${encodeURIComponent(scanId)}/report`)
+      .then((response) => response.ok ? response.json() : response.json().catch(() => ({})).then((body) => Promise.reject(new Error(body.error || 'Saved report could not be loaded.'))))
+      .then((data) => { if (!cancelled) setPersistedReport(data); })
+      .catch((error) => { if (!cancelled) setLoadError(error.message); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [scanId, scan.report, scan.scanId]);
+  const findings = report?.findings || [];
+  const summary = report?.summary || {};
   const risk = report?.risk || {};
   const riskLevel = risk.risk_level || summary.risk_level || 'REVIEW';
   const score = risk.risk_score ?? summary.risk_score ?? '—';
-  return <div className="page-wrap results-page"><div className="breadcrumb">Home <span>/</span> Evidence <span>/</span> {scanId}</div><PageIntro eyebrow="SAVED INSPECTION RESULT" title="Evidence, explained." copy="This result keeps the target, screenshots, classifications, risk score, customer impact, and ethical alternatives together for review." actions={<><button className="primary-cta" onClick={() => downloadJson(report || { scan: { target: targetUrl }, findings, summary })}>DOWNLOAD JSON <span>↓</span></button><button className="secondary-cta" onClick={() => navigate('/diff')}>OPEN INTERACTIVE DIFF</button></>} /><section className="result-summary"><div><span className="eyebrow">TARGET WEBSITE</span><strong>{report?.scan?.target || targetUrl}</strong><small>{report?.scan?.finished_at || scan.meta?.finished_at || 'Live result'}</small></div><div className={`risk-orb ${typeof score === 'number' ? 'scored' : 'unscored'}`}><span>OVERALL RISK</span><strong>{typeof score === 'number' ? riskLevel : 'NOT SCORED'}</strong><em>{typeof score === 'number' ? `${score.toFixed(1)} points` : 'Run an inspection first'}</em></div></section>{report?.scan?.inspection_status && report.scan.inspection_status !== 'INSPECTED' && <div className="inspection-note"><strong>{report.scan.inspection_status} · HTTP {report.scan.http_status ?? 'status unavailable'}</strong><span>{report.scan.message}</span></div>}<section className="results-kpis"><Kpi label="CAPTURED" value={summary.captured_findings ?? summary.verified_findings ?? findings.length} note="evidence-backed candidates" /><Kpi label="M2 CLASSIFIED" value={summary.m2_classified_findings ?? summary.m2_verified_findings ?? 0} note="language findings" /><Kpi label="HIGH SEVERITY" value={summary.high_severity_findings ?? 0} note="items for review" /><Kpi label="MAPPED" value={summary.compliance_mapped_findings ?? report?.compliance?.mapped_findings ?? 0} note="technical mappings" /></section><section className="impact-banner"><div><span className="eyebrow">CUSTOMER IMPACT LENS</span><h2>What changed for the person on the other side of the screen?</h2></div><p>Every finding should answer more than “what is this pattern?” It should show the decision pressure, cost, confusion, or commitment it can create.</p></section><section className="results-evidence"><div className="section-heading"><div><span className="eyebrow">EVIDENCE LEDGER</span><h2>Every captured finding</h2></div><span className="result-count">{findings.length} findings</span></div>{findings.length === 0 && report?.scan?.message && <div className="empty-inspection"><strong>No findings were produced for this scan.</strong><p>{report.scan.message}</p></div>}<div className="results-list">{findings.map((finding) => <EvidenceCard finding={finding} key={`${finding.id}-${finding.route}`} />)}</div></section><div className="overview-note"><strong>Review boundary.</strong><span>Risk and compliance values are explainable prototype outputs. They support human review and do not determine legal liability.</span></div></div>;
+  return <div className="page-wrap results-page"><div className="breadcrumb">Home <span>/</span> Evidence <span>/</span> {scanId}</div>{loading && <div className="inspection-note"><strong>Loading saved report…</strong><span>Reading the persisted evidence package for this scan.</span></div>}{loadError && <div className="inspection-error">{loadError}</div>}<PageIntro eyebrow="SAVED INSPECTION RESULT" title="Evidence, explained." copy="This result keeps the target, screenshots, classifications, risk score, customer impact, and ethical alternatives together for review." actions={<><button className="primary-cta" onClick={() => downloadJson(report || { scan: { target: targetUrl }, findings, summary })}>DOWNLOAD JSON <span>↓</span></button><button className="secondary-cta" onClick={() => navigate('/diff')}>OPEN INTERACTIVE DIFF</button></>} /><section className="result-summary"><div><span className="eyebrow">TARGET WEBSITE</span><strong>{report?.scan?.target || targetUrl}</strong><small>{report?.scan?.finished_at || scan.meta?.finished_at || 'Live result'}</small></div><div className={`risk-orb ${typeof score === 'number' ? 'scored' : 'unscored'}`}><span>OVERALL RISK</span><strong>{typeof score === 'number' ? riskLevel : 'NOT SCORED'}</strong><em>{typeof score === 'number' ? `${score.toFixed(1)} points` : 'Run an inspection first'}</em></div></section>{report?.scan?.inspection_status && report.scan.inspection_status !== 'INSPECTED' && <div className="inspection-note"><strong>{report.scan.inspection_status} · HTTP {report.scan.http_status ?? 'status unavailable'}</strong><span>{report.scan.message}</span></div>}<section className="results-kpis"><Kpi label="CAPTURED" value={summary.captured_findings ?? summary.verified_findings ?? findings.length} note="evidence-backed candidates" /><Kpi label="M2 CLASSIFIED" value={summary.m2_classified_findings ?? summary.m2_verified_findings ?? 0} note="language findings" /><Kpi label="HIGH SEVERITY" value={summary.high_severity_findings ?? 0} note="items for review" /><Kpi label="MAPPED" value={summary.compliance_mapped_findings ?? report?.compliance?.mapped_findings ?? 0} note="technical mappings" /></section><section className="impact-banner"><div><span className="eyebrow">CUSTOMER IMPACT LENS</span><h2>What changed for the person on the other side of the screen?</h2></div><p>Every finding should answer more than “what is this pattern?” It should show the decision pressure, cost, confusion, or commitment it can create.</p></section><section className="results-evidence"><div className="section-heading"><div><span className="eyebrow">EVIDENCE LEDGER</span><h2>Every captured finding</h2></div><span className="result-count">{findings.length} findings</span></div>{findings.length === 0 && report?.scan?.message && <div className="empty-inspection"><strong>No findings were produced for this scan.</strong><p>{report.scan.message}</p></div>}<div className="results-list">{findings.map((finding) => <EvidenceCard finding={finding} key={`${finding.id}-${finding.route}`} />)}</div></section><div className="overview-note"><strong>Review boundary.</strong><span>Risk and compliance values are explainable prototype outputs. They support human review and do not determine legal liability.</span></div></div>;
 }
 
 function Kpi({ label, value, note }) { return <div className="kpi"><span className="eyebrow">{label}</span><strong>{value}</strong><small>{note}</small></div>; }
@@ -232,13 +250,13 @@ function GuidelinesPage() {
 function CaseStudiesPage() { return <div className="page-wrap case-studies-page"><div className="breadcrumb">Home <span>/</span> Case Studies</div><PageIntro eyebrow="DOCUMENTED CONSEQUENCES" title="The patterns have a paper trail." copy="A stronger review does not stop at naming a pattern. It connects the interface to a public record, a measurable customer cost, and a design decision a team can change." /><section className="case-stat-grid"><div><strong>$2.5B</strong><span>Amazon Prime settlement</span></div><div><strong>35M</strong><span>estimated consumers in redress figure</span></div><div><strong>$245M</strong><span>Epic consumer refunds</span></div><div><strong>$100M</strong><span>Vonage refunds</span></div></section><div className="case-grid">{CASE_STUDIES.map((item) => <article className="case-card" key={item.title}><div className={`case-visual ${item.accent}`}><img src={item.image} alt={`${item.title} source visual`} /><span>{item.stat}</span><small>{item.label}</small></div><span className="case-label">{item.label}</span><h2>{item.title}</h2><span className="case-pattern">{item.pattern}</span><p>{item.summary}</p><div className="case-metric"><strong>{item.stat}</strong><span>{item.statLabel}</span><small>{item.detail}</small></div><a href={item.source} target="_blank" rel="noreferrer">Read the official source ↗</a></article>)}</div><div className="case-disclaimer"><strong>Presentation wording:</strong><span>Say “the regulator alleged” for complaints, “the order required” for finalized orders, and “the report describes” for broader research findings. Figures are shown with their source dates.</span></div></div>; }
 
 function InteractiveDiffPage({ scan, targetUrl }) {
-  const flipkartTarget = /(^|\.)flipkart\.com$/i.test(new URL(targetUrl || DEFAULT_TARGET).hostname || '');
+  const flipkartTarget = isFlipkartTarget(targetUrl);
   const hasLiveReport = Boolean(scan.report);
   const findings = hasLiveReport
     ? (scan.report.findings || [])
     : flipkartTarget
       ? []
-      : FALLBACK_FINDINGS;
+      : [];
   const [selectedKey, setSelectedKey] = useState('');
   const findingKey = (finding, index) => `${finding.id}-${finding.route}-${index}`;
   const selectedIndex = findings.findIndex((finding, index) => findingKey(finding, index) === selectedKey);

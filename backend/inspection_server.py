@@ -122,6 +122,44 @@ def launch_browser(playwright):
     return playwright.chromium.launch(**options)
 
 
+def finalize_findings(findings: list[dict], compliance_mapper=attach_compliance) -> list[dict]:
+    """Normalize classification and compliance for every scan input type."""
+    finalized = []
+    for finding in findings if isinstance(findings, list) else []:
+        result = dict(finding)
+        m2_findings = result.get("m2_findings")
+        if not isinstance(m2_findings, list):
+            m2_findings = classify_m1_finding(result)
+        m2_findings = [dict(item) for item in m2_findings]
+        if str(result.get("status", "")).upper() == "POTENTIAL":
+            for item in m2_findings:
+                item["status"] = "CANDIDATE"
+        result["m2_status"] = "CLASSIFIED" if m2_findings else "NOT_IN_M2_SCOPE"
+        result["m2_findings"] = m2_findings
+        result = compliance_mapper(result)
+        finalized.append(result)
+    return finalized
+
+
+def finalize_report(report: dict, compliance_mapper=attach_compliance) -> dict:
+    """Compute risk, compliance, and summary from the same finalized findings."""
+    result = dict(report)
+    result["findings"] = finalize_findings(result.get("findings", []), compliance_mapper)
+    result["risk"] = calculate_risk(result)
+    result["compliance"] = summarize_compliance(result["findings"])
+    summary = dict(result.get("summary", {}))
+    summary.update({key: value for key, value in result["risk"].items() if key != "scored_findings"})
+    m2_findings = [item for finding in result["findings"] for item in finding.get("m2_findings", [])]
+    summary.update({
+        "captured_findings": len(result["findings"]),
+        "m2_classified_findings": len(m2_findings),
+        "m2_verified_findings": sum(1 for item in m2_findings if item.get("status") == "VERIFIED"),
+        "compliance_mapped_findings": result["compliance"]["mapped_findings"],
+        "compliance_verified_mappings": result["compliance"]["verified_mappings"],
+    })
+    result["summary"] = summary
+    return result
+
 def load_report(scan_id: str) -> dict | None:
     path = LIVE_ROOT / scan_id / "report.json"
     if not path.is_file():
@@ -138,6 +176,8 @@ def record_or_disk(scan_id: str):
         return record
     report = load_report(scan_id)
     if not report:
+        report = DATABASE.get_report(scan_id)
+    if not isinstance(report, dict):
         return None
     scan = report.get("scan", {})
     pattern_ids = scan.get("pattern_ids") or [f.get("id") for f in FINDINGS]
@@ -254,6 +294,7 @@ class Handler(BaseHTTPRequestHandler):
                 continue
             findings.append({**item, "id": item["pattern_id"], "name": item["pattern_name"], "route": f"upload://{filename}", "selector": "OCR text" if kind == "screenshot" else "file content", "screenshot": screenshot_value, "screenshot_file": repo_path(artifact_path) if kind == "screenshot" else "", "observed_text": "; ".join(item["evidence_text"]), "evidence": "; ".join(item["evidence_text"]), "harm": item["customer_harm"], "fix": item["recommendation"]})
         report = {"scan": {"scan_id": scan_id, "target": f"upload://{filename}", "mode": f"{kind} artifact scan", "started_at": datetime.now(timezone.utc).isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(), "pattern_ids": [item[0] for item in CATEGORY_DEFINITIONS]}, "categories": [{"pattern_id": item[0], "pattern_name": item[1], "family": item[2]} for item in CATEGORY_DEFINITIONS], "pages": [{"index": 1, "url_final": f"upload://{filename}", "title": filename, "category_results": category_results, "visible_text_characters": len(extracted), "artifact": repo_path(artifact_path)}], "findings": findings, "summary": {"pages_scanned": 1, "pages_requested": 1, "taxonomy_categories": len(CATEGORY_DEFINITIONS), "potential_matches": len(findings), "input_kind": kind, "filename": filename, "ocr_characters": len(extracted) if kind == "screenshot" else 0, "rogue_malware_status": "EXCLUDED_BY_SCOPE"}}
+        report = finalize_report(report, attach_flipkart_heuristic_mapping)
         write_json(out_dir / "report.json", report)
         STORE.create(scan_id, report["scan"]["target"], report["scan"]["pattern_ids"])
         STORE.update(scan_id, status="COMPLETED", started_at=report["scan"]["started_at"], finished_at=report["scan"]["finished_at"], report=report)
@@ -311,9 +352,9 @@ class Handler(BaseHTTPRequestHandler):
         hostname = (urlparse(target).hostname or "").lower()
         return hostname in {"flipkart.com", "www.flipkart.com"} or hostname.endswith(".flipkart.com")
 
-    def _run_public_scan(self, target: str, urls: list[str], emit=None, mode: str = "generalized live URL scan") -> dict:
+    def _run_public_scan(self, target: str, urls: list[str], emit=None, mode: str = "generalized live URL scan", scan_id: str | None = None) -> dict:
         """Run the generalized public-page scanner through the dashboard SSE contract."""
-        scan_id = "public-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        scan_id = scan_id or "public-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         out_dir = LIVE_ROOT / scan_id
         pattern_ids = [category_id for category_id, _, _ in CATEGORY_DEFINITIONS]
         parsed_target = urlparse(target)
@@ -374,6 +415,7 @@ class Handler(BaseHTTPRequestHandler):
         }
         finished_at = raw.get("scan", {}).get("finished_at") or datetime.now(timezone.utc).isoformat()
         report = {"scan": {**raw.get("scan", {}), "scan_id": scan_id, "target": target, "pattern_ids": pattern_ids, "finished_at": finished_at}, "categories": raw.get("categories", []), "pages": pages, "findings": findings, "cart_interaction": raw.get("cart_interaction", {}), "risk": risk, "compliance": compliance, "summary": summary}
+        report = finalize_report(report, attach_flipkart_heuristic_mapping)
         out_dir.mkdir(parents=True, exist_ok=True)
         for path in (out_dir / "scan.json", out_dir / "report.json", out_dir / "response.json"):
             write_json(path, report)
@@ -382,11 +424,11 @@ class Handler(BaseHTTPRequestHandler):
         DATABASE.create_scan(scan_id, target, pattern_ids)
         DATABASE.save_report(report)
         if emit:
-            emit("complete", {"scan_id": scan_id, "completed": total_steps, "total": total_steps, "findings": findings, "summary": summary, "finished_at": finished_at, "message": "Flipkart page and isolated cart scan complete — 13-category evidence is ready for review."})
+            emit("complete", {"scan_id": scan_id, "completed": total_steps, "total": total_steps, "findings": report["findings"], "summary": report["summary"], "finished_at": finished_at, "message": "Flipkart page and isolated cart scan complete — 13-category evidence is ready for review."})
         return report
 
-    def run_flipkart_scan(self, target: str, emit=None) -> dict:
-        return self._run_public_scan(target, DEFAULT_URLS, emit=emit, mode="Flipkart 13-category read-only scan")
+    def run_flipkart_scan(self, target: str, emit=None, scan_id: str | None = None) -> dict:
+        return self._run_public_scan(target, DEFAULT_URLS, emit=emit, mode="Flipkart 13-category read-only scan", scan_id=scan_id)
 
     def run_generalized_scan(self, target: str, emit=None) -> dict:
         return self.run_public_page_scan(target, emit=emit)
@@ -422,7 +464,9 @@ class Handler(BaseHTTPRequestHandler):
     def run_scan(self, target: str, emit=None, scan_id: str | None = None, pattern_ids: list[str] | None = None) -> dict:
         validate_public_target(target)
         if self.is_flipkart_target(target):
-            return self.run_flipkart_scan(target, emit=emit)
+            if scan_id is None:
+                return self.run_flipkart_scan(target, emit=emit)
+            return self.run_flipkart_scan(target, emit=emit, scan_id=scan_id)
 
         parsed_target = urlparse(target)
         if not (
@@ -503,9 +547,7 @@ class Handler(BaseHTTPRequestHandler):
         finished_at = datetime.now(timezone.utc).isoformat()
         all_m2 = [item for finding in captured for item in finding.get("m2_findings", [])]
         report = {"scan": {**scan_meta, "finished_at": finished_at}, "findings": captured, "summary": {"verified_findings": len(captured), "pages_scanned": len(set(item["route"] for item in captured)), "m2_classified_findings": len(all_m2), "m2_verified_findings": sum(1 for item in all_m2 if item.get("status") == "VERIFIED"), "m2_detection_sources": {source: sum(1 for item in all_m2 if item.get("detection_source") == source) for source in sorted({item.get("detection_source") for item in all_m2})}}}
-        report["risk"] = calculate_risk(report)
-        report["summary"].update({key: value for key, value in report["risk"].items() if key != "scored_findings"})
-        report["compliance"] = summarize_compliance(captured)
+        report = finalize_report(report, attach_compliance)
         report["summary"]["compliance_mapped_findings"] = report["compliance"]["mapped_findings"]
         report["summary"]["compliance_verified_mappings"] = report["compliance"]["verified_mappings"]
         scan_path = out_dir / "scan.json"
@@ -719,6 +761,7 @@ class Handler(BaseHTTPRequestHandler):
             "compliance": compliance,
             "summary": summary,
         }
+        report = finalize_report(report, lambda finding: attach_flipkart_heuristic_mapping(finding, source="Generic public-page 13-category heuristic mapping"))
         for filename in ("scan.json", "report.json", "response.json"):
             write_json(out_dir / filename, report)
         STORE.update(scan_id, status="COMPLETED", finished_at=finished_at, report=report)
