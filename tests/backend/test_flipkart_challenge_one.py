@@ -99,16 +99,22 @@ class TestFlipkartChallengeOne(unittest.TestCase):
                 def launch(**_kwargs):
                     return FakeBrowser()
 
+        callbacks = []
         with tempfile.TemporaryDirectory() as directory, patch(
             "scripts.flipkart_challenge_one.sync_playwright"
         ) as sync_playwright:
             sync_playwright.return_value.__enter__.return_value = FakePlaywright()
-            report = scan([DEFAULT_URLS[0]], Path(directory))
+            report = scan([DEFAULT_URLS[0]], Path(directory), on_page=lambda page, index, total: callbacks.append((page, index, total)))
             saved = json.loads((Path(directory) / "report.json").read_text())
 
         self.assertEqual(report["summary"]["pages_scanned"], 1, report["errors"])
         self.assertEqual(saved["findings"][0]["pattern_id"], "DP01")
         self.assertEqual(saved["findings"][0]["status"], "POTENTIAL")
+        self.assertIn(saved["findings"][0]["severity"], {"LOW", "MEDIUM", "HIGH"})
+        self.assertGreater(saved["findings"][0]["confidence"], 0)
+        self.assertTrue(saved["findings"][0]["customer_harm"])
+        self.assertEqual(len(callbacks), 1)
+        self.assertEqual(callbacks[0][1:], (1, 1))
         self.assertEqual(len(saved["categories"]), 13)
         self.assertEqual(saved["summary"]["rogue_malware_status"], "EXCLUDED_BY_SCOPE")
 

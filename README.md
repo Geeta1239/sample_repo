@@ -12,7 +12,17 @@ The current implementation is validated against the controlled **Morrow Market**
 
 Each page reports every category as `POTENTIAL`, `NOT_OBSERVED`, or `EXCLUDED_BY_SCOPE`. Findings are deliberately labelled `POTENTIAL` and are not legal conclusions. Rogue Malware is always `EXCLUDED_BY_SCOPE`: this safe scanner never creates, probes, or executes malicious behavior.
 
-When `https://www.flipkart.com/` is entered in the ShadowBait dashboard, `backend/inspection_server.py` automatically selects this scanner instead of the controlled demo-site route. It streams a `PAGES INSPECTED` event after each public page capture and streams potential findings as soon as their page is processed. Restart the backend after pulling changes because the Python inspection process does not hot-reload.
+When `https://www.flipkart.com/` is entered in the ShadowBait dashboard, `backend/inspection_server.py` automatically selects this scanner. Other absolute `http://` or `https://` URLs use the same generalized scanner against the supplied live page. The dashboard streams a `PAGES INSPECTED` event after each capture and streams potential findings as soon as their page is processed. Restart the backend after pulling changes because the Python inspection process does not hot-reload.
+
+### Three supported inspection inputs
+
+The inspection console supports:
+
+1. **Live URL** — opens the target in a fresh Chromium context, captures visible text/HTML/screenshots, and evaluates all 13 categories.
+2. **Screenshot upload** — stores the original image as evidence, runs OCR when Tesseract is available, and evaluates the extracted interface language.
+3. **File upload** — accepts HTML, text, Markdown, JSON, CSV, and PDF files; extracts their content and evaluates the same category taxonomy.
+
+Potential findings include `severity`, a transparent heuristic `confidence`, `customer_harm`, observed evidence, and an ethical recommendation. These are review candidates, not legal conclusions.
 
 The scanner is intentionally non-transactional: it does not log in, enter personal data, set a delivery location, add items to a cart, submit forms, or proceed to checkout.
 
@@ -23,7 +33,7 @@ python scripts/flipkart_challenge_one.py
 
 Use `--url` repeatedly to run a smaller public, read-only scan against explicitly supplied Flipkart URLs.
 
-> **Technical scope:** The current prototype is not a fully generic crawler for every arbitrary public website. It is a controlled inspection and evidence pipeline designed to expand toward generic DOM discovery, user-journey crawling, browser-extension analysis, and larger annotated datasets.
+> **Technical scope:** The generalized URL mode inspects the supplied public page and does not log in, submit forms, add items to carts, or traverse destructive flows. It is not a full authenticated crawler or a legal determination system.
 
 ---
 

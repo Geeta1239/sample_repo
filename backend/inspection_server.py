@@ -4,6 +4,8 @@ import base64
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -124,7 +126,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _read_json(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))
-        if length <= 0 or length > 1_000_000:
+        if length <= 0 or length > 15_000_000:
             raise ValueError("request body must be a non-empty JSON object")
         try:
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
@@ -141,6 +143,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/artifact-scan":
+            try:
+                self._handle_artifact_scan(self._read_json())
+            except ValueError as exc:
+                self._json(400, {"error": str(exc)})
+            except Exception as exc:
+                self._json(500, {"error": f"artifact scan failed: {exc}"})
+            return
         if parsed.path != "/api/scans":
             self.send_error(404)
             return
@@ -156,6 +166,59 @@ class Handler(BaseHTTPRequestHandler):
         DATABASE.create_scan(scan_id, target, pattern_ids)
         Thread(target=self._run_background_scan, args=(scan_id, target, pattern_ids), daemon=True).start()
         self._json(202, {"scan_id": scan_id, "status": record.status, "target": target, "pattern_ids": pattern_ids, "status_url": f"/api/scans/{scan_id}", "report_url": f"/api/scans/{scan_id}/report"})
+
+    def _handle_artifact_scan(self, payload: dict) -> None:
+        kind = str(payload.get("kind", "")).lower().strip()
+        filename = str(payload.get("filename", "upload"))[:180]
+        encoded = str(payload.get("data", ""))
+        if kind not in {"screenshot", "file"}:
+            raise ValueError("kind must be screenshot or file")
+        if not encoded:
+            raise ValueError("data must contain a base64-encoded upload")
+        if "," in encoded and encoded.startswith("data:"):
+            encoded = encoded.split(",", 1)[1]
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+        except Exception as exc:
+            raise ValueError("data must be valid base64") from exc
+        if not raw or len(raw) > 10_000_000:
+            raise ValueError("upload must be between 1 byte and 10 MB")
+        scan_id = "artifact-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        out_dir = LIVE_ROOT / scan_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        suffix = Path(filename).suffix.lower() or (".png" if kind == "screenshot" else ".bin")
+        artifact_path = out_dir / f"input{suffix}"
+        artifact_path.write_bytes(raw)
+        extracted = ""
+        if kind == "screenshot":
+            tesseract = shutil.which("tesseract")
+            if tesseract:
+                result = subprocess.run([tesseract, str(artifact_path), "stdout"], capture_output=True, text=True, timeout=45, check=False)
+                extracted = result.stdout.strip()
+            if not extracted:
+                extracted = "No readable text was extracted from the screenshot. Review the captured image manually."
+        elif suffix == ".pdf" and shutil.which("pdftotext"):
+            result = subprocess.run(["pdftotext", str(artifact_path), "-"], capture_output=True, text=True, timeout=45, check=False)
+            extracted = result.stdout.strip()
+        else:
+            extracted = raw.decode("utf-8", errors="replace")
+        from scripts.flipkart_challenge_one import build_category_results, detect_category_matches
+        html = extracted if suffix in {".html", ".htm", ".xml", ".svg"} else ""
+        matches = detect_category_matches(extracted, html)
+        screenshot_value = data_url(raw) if kind == "screenshot" else ""
+        category_results = build_category_results(matches, f"upload://{filename}", repo_path(artifact_path), repo_path(artifact_path))
+        findings = []
+        for item in category_results:
+            if item["status"] != "POTENTIAL":
+                continue
+            findings.append({**item, "id": item["pattern_id"], "name": item["pattern_name"], "route": f"upload://{filename}", "selector": "OCR text" if kind == "screenshot" else "file content", "screenshot": screenshot_value, "screenshot_file": repo_path(artifact_path) if kind == "screenshot" else "", "observed_text": "; ".join(item["evidence_text"]), "evidence": "; ".join(item["evidence_text"]), "harm": item["customer_harm"], "fix": item["recommendation"]})
+        report = {"scan": {"scan_id": scan_id, "target": f"upload://{filename}", "mode": f"{kind} artifact scan", "started_at": datetime.now(timezone.utc).isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(), "pattern_ids": [item[0] for item in CATEGORY_DEFINITIONS]}, "categories": [{"pattern_id": item[0], "pattern_name": item[1], "family": item[2]} for item in CATEGORY_DEFINITIONS], "pages": [{"index": 1, "url_final": f"upload://{filename}", "title": filename, "category_results": category_results, "visible_text_characters": len(extracted), "artifact": repo_path(artifact_path)}], "findings": findings, "summary": {"pages_scanned": 1, "pages_requested": 1, "taxonomy_categories": len(CATEGORY_DEFINITIONS), "potential_matches": len(findings), "input_kind": kind, "filename": filename, "ocr_characters": len(extracted) if kind == "screenshot" else 0, "rogue_malware_status": "EXCLUDED_BY_SCOPE"}}
+        write_json(out_dir / "report.json", report)
+        STORE.create(scan_id, report["scan"]["target"], report["scan"]["pattern_ids"])
+        STORE.update(scan_id, status="COMPLETED", started_at=report["scan"]["started_at"], finished_at=report["scan"]["finished_at"], report=report)
+        DATABASE.create_scan(scan_id, report["scan"]["target"], report["scan"]["pattern_ids"])
+        DATABASE.save_report(report)
+        self._json(200, {"scan_id": scan_id, "report": report, "message": f"{kind.title()} analyzed across all 13 categories."})
 
     def _run_background_scan(self, scan_id: str, target: str, pattern_ids: list[str]) -> None:
         try:
@@ -187,7 +250,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "keep-alive")
         self.end_headers()
         try:
-            runner = self.run_flipkart_scan if self.is_flipkart_target(target) else self.run_scan
+            runner = self.run_flipkart_scan if self.is_flipkart_target(target) else self.run_generalized_scan
             runner(target, emit=lambda event, payload: sse(self, event, payload))
             self.close_connection = True
         except Exception as exc:
@@ -202,31 +265,31 @@ class Handler(BaseHTTPRequestHandler):
         hostname = (urlparse(target).hostname or "").lower()
         return hostname in {"flipkart.com", "www.flipkart.com"} or hostname.endswith(".flipkart.com")
 
-    def run_flipkart_scan(self, target: str, emit=None) -> dict:
-        """Run the external Flipkart scanner through the dashboard SSE contract."""
-        scan_id = "flipkart-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    def _run_public_scan(self, target: str, urls: list[str], emit=None, mode: str = "generalized live URL scan") -> dict:
+        """Run the generalized public-page scanner through the dashboard SSE contract."""
+        scan_id = "public-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         out_dir = LIVE_ROOT / scan_id
         pattern_ids = [category_id for category_id, _, _ in CATEGORY_DEFINITIONS]
         if emit:
-            emit("started", {"scan_id": scan_id, "target": target, "browser": "Chromium", "viewport": {"width": 1440, "height": 1000}, "total": len(DEFAULT_URLS), "pattern_ids": pattern_ids, "mode": "Flipkart 13-category read-only scan", "message": "Chromium browser started for the 13-category Flipkart scan."})
+            emit("started", {"scan_id": scan_id, "target": target, "browser": "Chromium", "viewport": {"width": 1440, "height": 1000}, "total": len(urls), "pattern_ids": pattern_ids, "mode": mode, "message": f"Chromium browser started for the {mode}."})
         streamed_findings = []
         def on_page(page: dict, index: int, total: int) -> None:
             page_url = page.get("url_final", page.get("url_requested", ""))
             if emit:
-                emit("stage", {"completed": index, "total": total, "page_index": index, "page_url": page_url, "page_title": page.get("title", ""), "page_status": "ERROR" if page.get("error") else "INSPECTED", "message": f"Inspected Flipkart page {index}/{total}: {page_url}"})
+                emit("stage", {"completed": index, "total": total, "page_index": index, "page_url": page_url, "page_title": page.get("title", ""), "page_status": "ERROR" if page.get("error") else "INSPECTED", "message": f"Inspected page {index}/{total}: {page_url}"})
             for item in page.get("category_results", []):
                 if item.get("status") != "POTENTIAL":
                     continue
                 screenshot_file = REPO_ROOT / item["screenshot"]
                 screenshot_value = data_url(screenshot_file.read_bytes()) if screenshot_file.is_file() else item.get("screenshot", "")
-                finding = {**item, "id": item["pattern_id"], "name": item["pattern_name"], "route": item["page_url"], "selector": "body", "screenshot": screenshot_value, "screenshot_file": item.get("screenshot"), "observed_text": "; ".join(item.get("evidence_text", [])), "evidence": "; ".join(item.get("evidence_text", [])), "harm": "May influence a customer decision through pressure, confusion, cost, or reduced choice.", "fix": "Make the choice, cost, and consequence clear and neutral."}
+                finding = {**item, "id": item["pattern_id"], "name": item["pattern_name"], "route": item["page_url"], "selector": "body", "screenshot": screenshot_value, "screenshot_file": item.get("screenshot"), "observed_text": "; ".join(item.get("evidence_text", [])), "evidence": "; ".join(item.get("evidence_text", [])), "harm": item.get("customer_harm", "May influence a customer decision through pressure, confusion, cost, or reduced choice."), "fix": item.get("recommendation", "Make the choice, cost, and consequence clear and neutral.")}
                 streamed_findings.append(finding)
                 if emit:
                     emit("finding", {"completed": index, "total": total, "finding": finding, "message": f"Potential {finding['name']} found on {page_url}."})
-        raw = scan_flipkart(DEFAULT_URLS, out_dir, on_page=on_page)
+        raw = scan_flipkart(urls, out_dir, on_page=on_page)
         pages = raw.get("pages", [])
         findings = streamed_findings
-        summary = {**raw.get("summary", {}), "verified_findings": len(findings), "pages_scanned": len(pages), "flipkart_13_category_scan": True}
+        summary = {**raw.get("summary", {}), "verified_findings": len(findings), "pages_scanned": len(pages), "generalized_13_category_scan": True}
         finished_at = raw.get("scan", {}).get("finished_at") or datetime.now(timezone.utc).isoformat()
         report = {"scan": {**raw.get("scan", {}), "scan_id": scan_id, "target": target, "pattern_ids": pattern_ids, "finished_at": finished_at}, "categories": raw.get("categories", []), "pages": pages, "findings": findings, "summary": summary}
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -237,8 +300,14 @@ class Handler(BaseHTTPRequestHandler):
         DATABASE.create_scan(scan_id, target, pattern_ids)
         DATABASE.save_report(report)
         if emit:
-            emit("complete", {"scan_id": scan_id, "completed": len(pages), "total": len(DEFAULT_URLS), "findings": findings, "summary": summary, "finished_at": finished_at, "message": "Flipkart inspection complete — 13-category evidence is ready for review."})
+            emit("complete", {"scan_id": scan_id, "completed": len(pages), "total": len(urls), "findings": findings, "summary": summary, "finished_at": finished_at, "message": f"{mode} complete — 13-category evidence is ready for review."})
         return report
+
+    def run_flipkart_scan(self, target: str, emit=None) -> dict:
+        return self._run_public_scan(target, DEFAULT_URLS, emit=emit, mode="Flipkart 13-category read-only scan")
+
+    def run_generalized_scan(self, target: str, emit=None) -> dict:
+        return self._run_public_scan(target, [target], emit=emit, mode="Generalized live URL scan")
 
     def _get_scan_resource(self, path: str) -> None:
         parts = path.strip("/").split("/")

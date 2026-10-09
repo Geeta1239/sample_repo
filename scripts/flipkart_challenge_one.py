@@ -50,6 +50,26 @@ CATEGORY_DEFINITIONS = [
     ("DP13", "Rogue Malware", "Safety boundary"),
 ]
 CATEGORY_BY_ID = {item[0]: item for item in CATEGORY_DEFINITIONS}
+CATEGORY_SEVERITY = {
+    "DP01": "MEDIUM", "DP02": "HIGH", "DP03": "MEDIUM", "DP04": "HIGH",
+    "DP05": "HIGH", "DP06": "MEDIUM", "DP07": "HIGH", "DP08": "HIGH",
+    "DP09": "LOW", "DP10": "LOW", "DP11": "MEDIUM", "DP12": "HIGH", "DP13": "EXCLUDED",
+}
+CATEGORY_HARM = {
+    "DP01": "May rush a customer into a decision before they can compare options or verify the claim.",
+    "DP02": "May add an optional cost or commitment without a clear affirmative choice.",
+    "DP03": "May use guilt or embarrassment to steer a customer toward an optional action.",
+    "DP04": "May make an unrelated action a condition of access, purchase, or continuation.",
+    "DP05": "May make recurring commitment easier to start than to stop.",
+    "DP06": "May obscure a lower-commitment choice through visual hierarchy or interaction design.",
+    "DP07": "May redirect a customer from an advertised outcome to a different or more expensive one.",
+    "DP08": "May delay the complete payable price until late in the decision journey.",
+    "DP09": "May make commercial persuasion look like independent information.",
+    "DP10": "May repeatedly interrupt or pressure a customer after they decline a prompt.",
+    "DP11": "May make the consequence of a choice difficult for a reasonable customer to understand.",
+    "DP12": "May obscure renewal, recurring billing, or the path to control an ongoing charge.",
+    "DP13": "Excluded by the safe scanning boundary; no malicious behavior is created or tested.",
+}
 
 
 def slug(url: str) -> str:
@@ -178,6 +198,10 @@ def build_category_results(matches: dict[str, list[str]], page_url: str, screens
             "screenshot": screenshot,
             "dom_text": dom_text,
             "interpretation": interpretation,
+            "severity": CATEGORY_SEVERITY[category_id],
+            "confidence": round(min(0.98, 0.55 + (0.1 * min(len(evidence), 4))), 2) if evidence else 0.0,
+            "customer_harm": CATEGORY_HARM[category_id],
+            "recommendation": "Make the choice, price, and consequence clear, neutral, and easy to review.",
         })
     return results
 
