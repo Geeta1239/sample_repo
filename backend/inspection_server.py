@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlparse
 from playwright.sync_api import sync_playwright
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "backend"))
 
 from app.api.scan_orchestrator import ScanStore, validate_scan_request  # noqa: E402
@@ -21,6 +22,7 @@ from app.compliance.mapping import attach_compliance, summarize_compliance  # no
 from app.database.repository import ScanDatabase  # noqa: E402
 from app.integration.m1_m2_adapter import classify_m1_finding  # noqa: E402
 from app.risk.scoring import calculate_risk  # noqa: E402
+from scripts.flipkart_challenge_one import CATEGORY_DEFINITIONS, DEFAULT_URLS, scan as scan_flipkart  # noqa: E402
 
 
 HOST = os.environ.get("INSPECTION_API_HOST", "0.0.0.0")
@@ -96,7 +98,8 @@ def record_or_disk(scan_id: str):
     if not report:
         return None
     scan = report.get("scan", {})
-    record = STORE.create(scan_id, scan.get("target", ""), [f.get("id") for f in FINDINGS])
+    pattern_ids = scan.get("pattern_ids") or [f.get("id") for f in FINDINGS]
+    record = STORE.create(scan_id, scan.get("target", ""), pattern_ids)
     STORE.update(scan_id, status="COMPLETED", started_at=scan.get("started_at"), finished_at=scan.get("finished_at"), report=report)
     return STORE.get(scan_id)
 
@@ -184,7 +187,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "keep-alive")
         self.end_headers()
         try:
-            self.run_scan(target, emit=lambda event, payload: sse(self, event, payload))
+            runner = self.run_flipkart_scan if self.is_flipkart_target(target) else self.run_scan
+            runner(target, emit=lambda event, payload: sse(self, event, payload))
             self.close_connection = True
         except Exception as exc:
             try:
@@ -192,6 +196,45 @@ class Handler(BaseHTTPRequestHandler):
                 self.close_connection = True
             except BrokenPipeError:
                 pass
+
+    @staticmethod
+    def is_flipkart_target(target: str) -> bool:
+        hostname = (urlparse(target).hostname or "").lower()
+        return hostname in {"flipkart.com", "www.flipkart.com"} or hostname.endswith(".flipkart.com")
+
+    def run_flipkart_scan(self, target: str, emit=None) -> dict:
+        """Run the external Flipkart scanner through the dashboard SSE contract."""
+        scan_id = "flipkart-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        out_dir = LIVE_ROOT / scan_id
+        pattern_ids = [category_id for category_id, _, _ in CATEGORY_DEFINITIONS]
+        if emit:
+            emit("started", {"scan_id": scan_id, "target": target, "browser": "Chromium", "viewport": {"width": 1440, "height": 1000}, "total": len(DEFAULT_URLS), "pattern_ids": pattern_ids, "mode": "Flipkart 13-category read-only scan", "message": "Chromium browser started for the 13-category Flipkart scan."})
+        raw = scan_flipkart(DEFAULT_URLS, out_dir)
+        pages = raw.get("pages", [])
+        for index, page in enumerate(pages, start=1):
+            if emit:
+                emit("stage", {"completed": index - 1, "total": len(DEFAULT_URLS), "route": page.get("url_final", page.get("url_requested")), "message": f"Captured Flipkart page {index}/{len(DEFAULT_URLS)} and evaluated all 13 categories."})
+        findings = []
+        for item in raw.get("findings", []):
+            screenshot_file = REPO_ROOT / item["screenshot"]
+            screenshot_value = data_url(screenshot_file.read_bytes()) if screenshot_file.is_file() else item.get("screenshot", "")
+            finding = {**item, "id": item["pattern_id"], "name": item["pattern_name"], "route": item["page_url"], "selector": "body", "screenshot": screenshot_value, "screenshot_file": item.get("screenshot"), "observed_text": "; ".join(item.get("evidence_text", [])), "evidence": "; ".join(item.get("evidence_text", [])), "harm": "May influence a customer decision through pressure, confusion, cost, or reduced choice.", "fix": "Make the choice, cost, and consequence clear and neutral."}
+            findings.append(finding)
+            if emit:
+                emit("finding", {"completed": len(pages), "total": len(DEFAULT_URLS), "finding": finding, "message": f"Captured potential {finding['name']} evidence from Flipkart."})
+        summary = {**raw.get("summary", {}), "verified_findings": len(findings), "pages_scanned": len(pages), "flipkart_13_category_scan": True}
+        finished_at = raw.get("scan", {}).get("finished_at") or datetime.now(timezone.utc).isoformat()
+        report = {"scan": {**raw.get("scan", {}), "scan_id": scan_id, "target": target, "pattern_ids": pattern_ids, "finished_at": finished_at}, "categories": raw.get("categories", []), "pages": pages, "findings": findings, "summary": summary}
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for path in (out_dir / "scan.json", out_dir / "report.json", out_dir / "response.json"):
+            write_json(path, report)
+        STORE.create(scan_id, target, pattern_ids)
+        STORE.update(scan_id, status="COMPLETED", started_at=report["scan"].get("started_at"), finished_at=finished_at, report=report)
+        DATABASE.create_scan(scan_id, target, pattern_ids)
+        DATABASE.save_report(report)
+        if emit:
+            emit("complete", {"scan_id": scan_id, "completed": len(pages), "total": len(DEFAULT_URLS), "findings": findings, "summary": summary, "finished_at": finished_at, "message": "Flipkart inspection complete — 13-category evidence is ready for review."})
+        return report
 
     def _get_scan_resource(self, path: str) -> None:
         parts = path.strip("/").split("/")
