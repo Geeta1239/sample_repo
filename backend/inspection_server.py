@@ -322,7 +322,11 @@ class Handler(BaseHTTPRequestHandler):
         screenshot_value = data_url(raw) if kind == "screenshot" else ""
         ux_findings = analyze_html(extracted, source="OCR readability heuristic" if kind == "screenshot" else "Uploaded HTML/content heuristic")
         if kind == "screenshot":
-            ux_findings.extend(not_assessable_for_screenshot("Screenshot input has no DOM or semantic markup.", repo_path(artifact_path)))
+            ux_findings.extend(not_assessable_for_screenshot("Screenshot input has no DOM or semantic markup.", screenshot_value))
+        for item in ux_findings:
+            item.setdefault("evidence", {})["screenshot_file"] = repo_path(artifact_path) if kind == "screenshot" else ""
+            if kind == "screenshot":
+                item["evidence"]["screenshot"] = screenshot_value
         category_results = build_category_results(matches, f"upload://{filename}", repo_path(artifact_path), repo_path(artifact_path))
         findings = []
         for item in category_results:
@@ -417,9 +421,12 @@ class Handler(BaseHTTPRequestHandler):
                     except (OSError, json.JSONDecodeError):
                         visible_text = ""
                 page_ux = analyze_html(dom_html_path.read_text(encoding="utf-8", errors="replace"), visible_text, source="Captured public-page HTML heuristic")
+                screenshot_path = REPO_ROOT / page["screenshot"] if page.get("screenshot") else None
+                screenshot_data = data_url(screenshot_path.read_bytes()) if screenshot_path and screenshot_path.is_file() else ""
                 for item in page_ux:
                     item["evidence"]["page"] = page_url
-                    item["evidence"]["screenshot"] = page.get("screenshot", "")
+                    item["evidence"]["screenshot"] = screenshot_data
+                    item["evidence"]["screenshot_file"] = page.get("screenshot", "")
                 ux_findings.extend(page_ux)
             if emit:
                 page_status = page.get("status") or ("ERROR" if page.get("error") else "INSPECTED")
@@ -571,7 +578,10 @@ class Handler(BaseHTTPRequestHandler):
                 text_path = dom_dir / f"{route_slug}-text.json"
                 html_path.write_text(page.content(), encoding="utf-8")
                 write_json(text_path, {"route": finding["route"], "url": page.url, "title": page.title(), "visible_text": page.locator("body").inner_text()})
-                ux_findings.extend(analyze_elements(collect_ux_elements(page), page.locator("body").inner_text(), source="Controlled-site DOM heuristic", screenshot=repo_path(screenshot_path)))
+                ux_findings.extend(analyze_elements(collect_ux_elements(page), page.locator("body").inner_text(), source="Controlled-site DOM heuristic", screenshot=data_url(screenshot)))
+                for item in ux_findings:
+                    if not item.get("evidence", {}).get("screenshot_file"):
+                        item["evidence"]["screenshot_file"] = repo_path(screenshot_path)
                 result = {**finding, "status": "VERIFIED", "visible": visible, "observed_text": text, "element_state": element_state, "screenshot": data_url(screenshot), "screenshot_file": repo_path(screenshot_path), "dom_html_file": repo_path(html_path), "dom_text_file": repo_path(text_path), "captured_at": datetime.now(timezone.utc).isoformat()}
                 if finding["id"] == "DP02":
                     page.locator("#donation").uncheck()
@@ -704,7 +714,9 @@ class Handler(BaseHTTPRequestHandler):
             html_path = dom_dir / "01-page.html"
             text_path = dom_dir / "01-page-text.json"
             screenshot = page.screenshot(path=str(screenshot_path), full_page=True)
-            ux_findings = analyze_elements(collect_ux_elements(page), visible_text, source="Public-page DOM heuristic", screenshot=repo_path(screenshot_path)) if not (page_blocked or no_content) else []
+            ux_findings = analyze_elements(collect_ux_elements(page), visible_text, source="Public-page DOM heuristic", screenshot=data_url(screenshot)) if not (page_blocked or no_content) else []
+            for item in ux_findings:
+                item.setdefault("evidence", {})["screenshot_file"] = repo_path(screenshot_path)
             html_path.write_text(html, encoding="utf-8")
             write_json(text_path, {
                 "url": page.url,
