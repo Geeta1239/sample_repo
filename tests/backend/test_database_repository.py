@@ -59,3 +59,19 @@ def test_database_persists_scan_evidence_and_findings(tmp_path: Path):
     with sqlite3.connect(tmp_path / "shadowbait.sqlite3") as connection:
         assert connection.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM findings").fetchone()[0] == 1
+
+
+def test_database_compacts_inline_screenshots_but_keeps_report_readable(tmp_path: Path):
+    database = ScanDatabase(tmp_path / "shadowbait.sqlite3")
+    report = {
+        "scan": {"scan_id": "live-large-report", "target": "https://example.com", "pattern_ids": []},
+        "findings": [{"id": "DP01", "screenshot": "data:image/png;base64," + ("a" * 2_000_000), "screenshot_file": "evidence/large.png"}],
+        "summary": {"risk_score": 0, "risk_level": "LOW"},
+    }
+
+    database.save_report(report)
+
+    saved = database.get_report("live-large-report")
+    assert saved is not None
+    assert saved["findings"][0]["screenshot"] == "[inline image omitted from SQLite; see screenshot_file]"
+    assert saved["findings"][0]["screenshot_file"] == "evidence/large.png"

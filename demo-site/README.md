@@ -47,6 +47,8 @@ These selectors and fixtures are implementation evidence for the scanner; they a
 
 The four UX-quality fixtures validate ShadowBait's separate accessibility and readability detector. The detector reports heuristic observations with DOM evidence, severity, confidence, and recommendations; it does not claim to be a complete WCAG audit.
 
+The main controlled scan from `http://127.0.0.1:3000` automatically visits all four UX fixture routes after the dark-pattern journeys, so the saved report contains both `findings` and `ux_findings` without requiring separate scans.
+
 ## Light and dark theme
 
 The store includes a light/dark theme toggle and persists the selection under `morrow-theme`. The visual language is intentionally different from ShadowBait: warm cream surfaces, coral actions, teal accents, and editorial product imagery.

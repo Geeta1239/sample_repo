@@ -56,6 +56,12 @@ FINDINGS = [
     {"id": "DP08", "name": "Drip Pricing", "route": "/checkout", "selector": '[data-ccpa-pattern="DRIP_PRICING"]', "evidence": "Delivery, platform, and handling fees appear in the later checkout summary.", "why": "Captured to show the product price beside the later fee breakdown and total.", "harm": "Delays accurate price comparison until late in the journey.", "ethical": "Show the complete payable estimate beside the product price."},
 ]
 FINDING_BY_ID = {item["id"]: item for item in FINDINGS}
+UX_FIXTURE_ROUTES = (
+    "/ux-a11y-bad",
+    "/ux-a11y-good",
+    "/ux-readability-bad",
+    "/ux-readability-good",
+)
 
 
 def sse(handler: BaseHTTPRequestHandler, event: str, payload: dict) -> None:
@@ -538,6 +544,7 @@ class Handler(BaseHTTPRequestHandler):
         scan_id = scan_id or "live-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         pattern_ids = pattern_ids or list(FINDING_BY_ID)
         selected_findings = [FINDING_BY_ID[item] for item in pattern_ids]
+        total_steps = len(selected_findings) + len(UX_FIXTURE_ROUTES)
         if STORE.get(scan_id) is None:
             STORE.create(scan_id, target, pattern_ids)
             DATABASE.create_scan(scan_id, target, pattern_ids)
@@ -552,7 +559,7 @@ class Handler(BaseHTTPRequestHandler):
             STORE.update(scan_id, status="RUNNING", started_at=started_at)
         DATABASE.update_scan(scan_id, status="RUNNING", started_at=started_at)
         if emit:
-            emit("started", {**scan_meta, "total": len(selected_findings), "message": "Chromium browser started with a fresh context."})
+            emit("started", {**scan_meta, "total": total_steps, "message": "Chromium browser started with dark-pattern and UX fixture coverage."})
         captured = []
         ux_findings = []
         with sync_playwright() as playwright:
@@ -561,7 +568,7 @@ class Handler(BaseHTTPRequestHandler):
             page = context.new_page()
             for index, finding in enumerate(selected_findings):
                 if emit:
-                    emit("stage", {"completed": index, "total": len(selected_findings), "pattern_id": finding["id"], "route": finding["route"], "selector": finding["selector"], "message": f"Opening {finding['route']} and reading {finding['selector']}"})
+                    emit("stage", {"completed": index, "total": total_steps, "pattern_id": finding["id"], "route": finding["route"], "page_url": target + finding["route"], "page_title": finding["name"], "page_status": "INSPECTING", "selector": finding["selector"], "message": f"Opening {finding['route']} and reading {finding['selector']}"})
                 page.goto(target + finding["route"], wait_until="networkidle")
                 locator = page.locator(finding["selector"]).first
                 if locator.count() == 0:
@@ -605,13 +612,41 @@ class Handler(BaseHTTPRequestHandler):
                 result = attach_compliance(result)
                 captured.append(result)
                 if emit:
-                    emit("finding", {"completed": index + 1, "total": len(selected_findings), "finding": result, "message": f"Captured {finding['id']} screenshot and saved evidence."})
-                    emit("classification", {"completed": index + 1, "total": len(selected_findings), "pattern_id": finding["id"], "status": result["m2_status"], "findings": m2_findings, "message": f"M2 classification {result['m2_status'].lower()} for {finding['id']}."})
+                    emit("finding", {"completed": index + 1, "total": total_steps, "finding": result, "message": f"Captured {finding['id']} screenshot and saved evidence."})
+                    emit("classification", {"completed": index + 1, "total": total_steps, "pattern_id": finding["id"], "status": result["m2_status"], "findings": m2_findings, "message": f"M2 classification {result['m2_status'].lower()} for {finding['id']}."})
+            for fixture_index, route in enumerate(UX_FIXTURE_ROUTES, start=len(selected_findings)):
+                if emit:
+                    emit("stage", {"completed": fixture_index, "total": total_steps, "pattern_id": "UX_FIXTURE", "route": route, "page_url": target + route, "page_title": route, "page_status": "INSPECTING", "message": f"Opening {route} and collecting accessibility/readability evidence"})
+                page.goto(target + route, wait_until="networkidle")
+                visible_text = page.locator("body").inner_text()
+                route_slug = slug(route)
+                screenshot_path = screenshots_dir / f"ux-{route_slug}.png"
+                html_path = dom_dir / f"{route_slug}.html"
+                text_path = dom_dir / f"{route_slug}-text.json"
+                screenshot = page.screenshot(path=str(screenshot_path), full_page=True)
+                html = page.content()
+                html_path.write_text(html, encoding="utf-8")
+                write_json(text_path, {"route": route, "url": page.url, "title": page.title(), "visible_text": visible_text})
+                page_ux = analyze_elements(
+                    collect_ux_elements(page),
+                    visible_text,
+                    source="Controlled-site UX fixture heuristic",
+                    screenshot=data_url(screenshot),
+                )
+                for item in page_ux:
+                    item["route"] = route
+                    item.setdefault("evidence", {})["page"] = page.url
+                    item["evidence"]["screenshot_file"] = repo_path(screenshot_path)
+                    item["evidence"]["dom_html_file"] = repo_path(html_path)
+                    item["evidence"]["dom_text_file"] = repo_path(text_path)
+                ux_findings.extend(page_ux)
+                if emit:
+                    emit("ux_finding", {"completed": fixture_index + 1, "total": total_steps, "route": route, "findings": page_ux, "message": f"Captured {len(page_ux)} UX observations from {route}."})
             context.close()
             browser.close()
         finished_at = datetime.now(timezone.utc).isoformat()
         all_m2 = [item for finding in captured for item in finding.get("m2_findings", [])]
-        report = {"scan": {**scan_meta, "finished_at": finished_at}, "findings": captured, "ux_findings": ux_findings, "summary": {"verified_findings": len(captured), "pages_scanned": len(set(item["route"] for item in captured)), "m2_classified_findings": len(all_m2), "m2_verified_findings": sum(1 for item in all_m2 if item.get("status") == "VERIFIED"), "m2_detection_sources": {source: sum(1 for item in all_m2 if item.get("detection_source") == source) for source in sorted({item.get("detection_source") for item in all_m2})}}}
+        report = {"scan": {**scan_meta, "finished_at": finished_at}, "findings": captured, "ux_findings": ux_findings, "summary": {"verified_findings": len(captured), "pages_scanned": len(set(item["route"] for item in captured)), "ux_fixture_routes_scanned": list(UX_FIXTURE_ROUTES), "m2_classified_findings": len(all_m2), "m2_verified_findings": sum(1 for item in all_m2 if item.get("status") == "VERIFIED"), "m2_detection_sources": {source: sum(1 for item in all_m2 if item.get("detection_source") == source) for source in sorted({item.get("detection_source") for item in all_m2})}}}
         report = finalize_report(report, attach_compliance)
         report["summary"]["compliance_mapped_findings"] = report["compliance"]["mapped_findings"]
         report["summary"]["compliance_verified_mappings"] = report["compliance"]["verified_mappings"]
@@ -624,7 +659,7 @@ class Handler(BaseHTTPRequestHandler):
             STORE.update(scan_id, status="COMPLETED", finished_at=finished_at, report=report)
         DATABASE.save_report(report)
         if emit:
-            emit("complete", {"scan_id": scan_id, "completed": len(captured), "total": len(selected_findings), "findings": captured, "summary": report["summary"], "scan_file": repo_path(scan_path), "report_file": repo_path(report_path), "response_file": repo_path(response_path), "finished_at": finished_at, "message": "Inspection complete — live evidence and M2 classifications ready and saved."})
+            emit("complete", {"scan_id": scan_id, "completed": total_steps, "total": total_steps, "findings": captured, "ux_findings": ux_findings, "summary": report["summary"], "scan_file": repo_path(scan_path), "report_file": repo_path(report_path), "response_file": repo_path(response_path), "finished_at": finished_at, "message": "Inspection complete — dark-pattern and UX evidence are ready and saved."})
         return report
 
     def run_public_page_scan(self, target: str, emit=None, scan_id: str | None = None) -> dict:

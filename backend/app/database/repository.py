@@ -9,6 +9,20 @@ from threading import Lock
 from typing import Any, Mapping
 
 
+def _compact_for_database(value: Any, key: str = "") -> Any:
+    """Keep SQLite durable reports bounded; full screenshots remain in evidence files."""
+    if isinstance(value, dict):
+        return {name: _compact_for_database(item, name) for name, item in value.items()}
+    if isinstance(value, list):
+        return [_compact_for_database(item, key) for item in value]
+    if isinstance(value, str) and (key in {"screenshot", "after_screenshot"} or value.startswith("data:image/")):
+        if value.startswith("data:image/"):
+            return "[inline image omitted from SQLite; see screenshot_file]"
+    if isinstance(value, str) and len(value) > 1_000_000:
+        return value[:1_000_000] + "\n[report field truncated for SQLite; see persisted evidence files]"
+    return value
+
+
 class ScanDatabase:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -107,7 +121,7 @@ class ScanDatabase:
                     "COMPLETED",
                     summary.get("risk_score"),
                     summary.get("risk_level"),
-                    json.dumps(report, ensure_ascii=False),
+                    json.dumps(_compact_for_database(report), ensure_ascii=False),
                     scan_id,
                 ),
             )
