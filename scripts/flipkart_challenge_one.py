@@ -1,22 +1,23 @@
-"""Read-only Flipkart Challenge One inspection.
+"""Read-only Flipkart Challenge One inspection across all 13 categories.
 
 The scanner visits public pages only, records visible text/HTML/screenshots, and
-runs the existing False Urgency detector. It does not log in, submit forms,
-change delivery settings, add products to a cart, or enter personal data.
+returns conservative candidates for the repository's 13-category atlas. It does
+not log in, submit forms, change delivery settings, add products to a cart, or
+enter personal data. Results are review candidates, not legal conclusions.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
-
-import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "backend"))
@@ -31,6 +32,24 @@ DEFAULT_URLS = [
     "https://www.flipkart.com/electronics",
     "https://www.flipkart.com/search?q=iphone",
 ]
+
+# Exact order and labels from prototype/src/main.jsx's 13-category guideline atlas.
+CATEGORY_DEFINITIONS = [
+    ("DP01", "False Urgency", "Pressure"),
+    ("DP02", "Basket Sneaking", "Consent"),
+    ("DP03", "Confirm Shaming", "Language"),
+    ("DP04", "Forced Action", "Commitment"),
+    ("DP05", "Subscription Trap", "Commitment"),
+    ("DP06", "Interface Interference", "Choice"),
+    ("DP07", "Bait and Switch", "Expectation"),
+    ("DP08", "Drip Pricing", "Transparency"),
+    ("DP09", "Disguised Advertisement", "Persuasion"),
+    ("DP10", "Nagging", "Persistence"),
+    ("DP11", "Trick Question", "Clarity"),
+    ("DP12", "SaaS Billing", "Recurring billing"),
+    ("DP13", "Rogue Malware", "Safety boundary"),
+]
+CATEGORY_BY_ID = {item[0]: item for item in CATEGORY_DEFINITIONS}
 
 
 def slug(url: str) -> str:
@@ -51,9 +70,116 @@ def artifact_path(path: Path) -> str:
 
 
 def launch_browser(playwright):
-    executable = __import__("os").environ.get("SHADOWBAIT_CHROMIUM_PATH")
+    executable = os.environ.get("SHADOWBAIT_CHROMIUM_PATH")
     options = {"executable_path": executable} if executable else {}
     return playwright.chromium.launch(**options)
+
+
+def _regex_matches(text: str, patterns: list[str]) -> list[str]:
+    """Return short source snippets for matching patterns, preserving evidence text."""
+    results: list[str] = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            start = max(0, match.start() - 70)
+            end = min(len(text), match.end() + 90)
+            snippet = re.sub(r"\s+", " ", text[start:end]).strip()
+            if snippet and snippet not in results:
+                results.append(snippet)
+    return results[:8]
+
+
+def _false_urgency(text: str) -> list[str]:
+    return [match.evidence_text for match in detect_false_urgency(segment_text(text))]
+
+
+def detect_category_matches(visible_text: str, html: str = "") -> dict[str, list[str]]:
+    """Apply transparent, conservative heuristics to all 13 categories.
+
+    The output is intentionally evidence-first: each value is source text that
+    triggered a candidate. Categories without a trigger are still represented
+    in the final report as NOT_OBSERVED.
+    """
+    text = f"{visible_text}\n{html}"
+    matches: dict[str, list[str]] = {category_id: [] for category_id, _, _ in CATEGORY_DEFINITIONS}
+    matches["DP01"] = _false_urgency(visible_text)
+    matches["DP02"] = _regex_matches(
+        text,
+        [r"checked[^>]{0,180}(?:donation|contribution|add[- ]?on|insurance|protection)",
+         r"(?:donation|contribution|add[- ]?on|insurance|protection)[^<]{0,120}checked",
+         r"optional[^\n]{0,100}(?:added|included|selected)"])
+    matches["DP03"] = _regex_matches(
+        visible_text,
+        [r"(?:no|yes),?\s+i\s+(?:don't|do not|can't|cannot|won't|will not)",
+         r"(?:refuse|decline|skip)[^\n]{0,80}(?:save|benefit|smart|miss)"])
+    matches["DP04"] = _regex_matches(
+        visible_text,
+        [r"(?:must|required|mandatory)\s+(?:login|log in|sign in|create an account|register)",
+         r"(?:login|log in|sign in)\s+to\s+(?:continue|view|buy|see|access)",
+         r"(?:verify|enter)\s+(?:phone|email)\s+to\s+(?:continue|view|buy)"])
+    matches["DP05"] = _regex_matches(
+        visible_text,
+        [r"free\s+(?:trial|membership|delivery)[^\n]{0,100}(?:renew|cancel|billing)",
+         r"(?:auto(?:matic)?[- ]?renew|recurring|renewal)[^\n]{0,100}(?:subscription|membership|trial)",
+         r"cancel(?:lation)?\s+(?:is|made|available|only)"])
+    matches["DP06"] = _regex_matches(
+        visible_text,
+        [r"(?:most popular|recommended|best value|top pick|assured)",
+         r"(?:continue without|skip|not now)[^\n]{0,100}(?:membership|offer|protection)"])
+    matches["DP07"] = _regex_matches(
+        visible_text,
+        [r"(?:unavailable|out of stock|no longer available)[^\n]{0,100}(?:upgrade|instead|similar)",
+         r"(?:advertised|selected|displayed)\s+(?:price|offer)[^\n]{0,100}(?:changed|different|upgrade)"])
+    matches["DP08"] = _regex_matches(
+        visible_text,
+        [r"(?:platform|handling|convenience|service)\s+fee",
+         r"(?:delivery|shipping)\s+(?:fee|charge)[^\n]{0,100}(?:total|checkout)",
+         r"additional\s+(?:charges?|fees?)"])
+    matches["DP09"] = _regex_matches(
+        visible_text,
+        [r"\bsponsored\b", r"\badvertisement\b", r"\bpromoted\b"])
+    matches["DP10"] = _regex_matches(
+        visible_text,
+        [r"(?:remind me later|enable notifications|turn on notifications)",
+         r"(?:don't miss|never miss)[^\n]{0,100}(?:update|alert|notification|offer)"])
+    matches["DP11"] = _regex_matches(
+        visible_text,
+        [r"(?:no,?\s+i\s+don't|do not not|without not|not unsubscribe)",
+         r"(?:learn more|continue)\s*(?:>|→)?\s*(?:agree|accept|subscribe)"])
+    matches["DP12"] = _regex_matches(
+        visible_text,
+        [r"(?:per\s+month|per\s+year|monthly|annual|yearly)\b",
+         r"(?:subscription|membership)\s+(?:plan|billing|price)",
+         r"(?:auto(?:matic)?[- ]?renew|recurring)\s+(?:payment|charge|billing)"])
+    # DP13 is an explicit safety boundary. The scanner never probes or creates
+    # malware behavior; therefore it is always reported as EXCLUDED_BY_SCOPE.
+    return {key: list(dict.fromkeys(value)) for key, value in matches.items()}
+
+
+def build_category_results(matches: dict[str, list[str]], page_url: str, screenshot: str, dom_text: str) -> list[dict[str, Any]]:
+    results = []
+    for category_id, name, family in CATEGORY_DEFINITIONS:
+        evidence = matches.get(category_id, [])
+        if category_id == "DP13":
+            status = "EXCLUDED_BY_SCOPE"
+            interpretation = "This safe scanner does not create, probe, or execute malware behavior."
+        else:
+            status = "POTENTIAL" if evidence else "NOT_OBSERVED"
+            interpretation = (
+                "Heuristic candidate requiring human review; not a legal conclusion."
+                if evidence else "No matching signal was observed in the captured public page text."
+            )
+        results.append({
+            "pattern_id": category_id,
+            "pattern_name": name,
+            "family": family,
+            "status": status,
+            "page_url": page_url,
+            "evidence_text": evidence,
+            "screenshot": screenshot,
+            "dom_text": dom_text,
+            "interpretation": interpretation,
+        })
+    return results
 
 
 def scan(urls: list[str], output_root: Path, timeout_ms: int = 45_000) -> dict[str, Any]:
@@ -66,10 +192,15 @@ def scan(urls: list[str], output_root: Path, timeout_ms: int = 45_000) -> dict[s
         "scan": {
             "target": "https://www.flipkart.com",
             "mode": "read-only public inspection",
+            "taxonomy": "13-category guideline atlas",
             "started_at": datetime.now(timezone.utc).isoformat(),
             "pages_requested": len(urls),
             "browser": "Chromium",
         },
+        "categories": [
+            {"pattern_id": category_id, "pattern_name": name, "family": family}
+            for category_id, name, family in CATEGORY_DEFINITIONS
+        ],
         "pages": [],
         "findings": [],
         "errors": [],
@@ -87,71 +218,63 @@ def scan(urls: list[str], output_root: Path, timeout_ms: int = 45_000) -> dict[s
                 try:
                     page.wait_for_load_state("networkidle", timeout=10_000)
                 except PlaywrightTimeoutError:
-                    # Dynamic storefronts can keep connections open; DOM content is enough.
                     pass
                 visible_text = page.locator("body").inner_text(timeout=timeout_ms)
+                html = page.content()
                 name = f"{index:02d}-{slug(page.url)}"
                 screenshot_path = screenshots / f"{name}.png"
                 html_path = dom / f"{name}.html"
                 text_path = dom / f"{name}-text.json"
                 page.screenshot(path=str(screenshot_path), full_page=True)
-                html_path.write_text(page.content(), encoding="utf-8")
+                html_path.write_text(html, encoding="utf-8")
                 write_json(text_path, {"url": page.url, "title": page.title(), "visible_text": visible_text})
-
-                matches = detect_false_urgency(segment_text(visible_text))
-                page_record.update(
-                    {
-                        "url_final": page.url,
-                        "title": page.title(),
-                        "visible_text_characters": len(visible_text),
-                        "screenshot": artifact_path(screenshot_path),
-                        "dom_html": artifact_path(html_path),
-                        "dom_text": artifact_path(text_path),
-                        "detected_false_urgency": [
-                            {
-                                "evidence_text": match.evidence_text,
-                                "categories": match.categories,
-                                "rule_confidence": match.rule_confidence,
-                            }
-                            for match in matches
-                        ],
-                    }
+                matches = detect_category_matches(visible_text, html)
+                category_results = build_category_results(
+                    matches, page.url, artifact_path(screenshot_path), artifact_path(text_path)
                 )
+                page_record.update({
+                    "url_final": page.url,
+                    "title": page.title(),
+                    "visible_text_characters": len(visible_text),
+                    "screenshot": artifact_path(screenshot_path),
+                    "dom_html": artifact_path(html_path),
+                    "dom_text": artifact_path(text_path),
+                    "category_results": category_results,
+                })
                 report["pages"].append(page_record)
-                for match in matches:
-                    report["findings"].append(
-                        {
-                            "pattern_id": "DP01",
-                            "pattern_name": "False Urgency",
-                            "status": "POTENTIAL",
-                            "page_url": page.url,
-                            "evidence_text": match.evidence_text,
-                            "categories": match.categories,
-                            "rule_confidence": match.rule_confidence,
-                            "screenshot": artifact_path(screenshot_path),
-                            "dom_text": artifact_path(text_path),
-                            "interpretation": "A detector candidate requiring human review; not a legal conclusion.",
-                            "ethical_recommendation": "Show truthful stock and fixed, clearly stated offer end times.",
-                        }
-                    )
-            except Exception as exc:  # keep the six-page scan useful if one page fails
+                report["findings"].extend(
+                    result for result in category_results if result["status"] == "POTENTIAL"
+                )
+            except Exception as exc:  # keep the multi-page scan useful if one page fails
                 page_record["error"] = f"{type(exc).__name__}: {exc}"
                 report["errors"].append(page_record)
-
         context.close()
         browser.close()
 
-    report["scan"].update(
-        {
-            "finished_at": datetime.now(timezone.utc).isoformat(),
-            "pages_scanned": len(report["pages"]),
-            "errors": len(report["errors"]),
-        }
-    )
+    potential_by_category = {
+        category_id: sum(
+            1 for finding in report["findings"] if finding["pattern_id"] == category_id
+        )
+        for category_id, _, _ in CATEGORY_DEFINITIONS
+    }
+    observed_category_ids = [key for key, value in potential_by_category.items() if value]
+    report["scan"].update({
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "pages_scanned": len(report["pages"]),
+        "errors": len(report["errors"]),
+    })
     report["summary"] = {
         "pages_scanned": len(report["pages"]),
         "pages_requested": len(urls),
-        "potential_false_urgency_findings": len(report["findings"]),
+        "taxonomy_categories": len(CATEGORY_DEFINITIONS),
+        "potential_matches": len(report["findings"]),
+        "potential_matches_by_category": potential_by_category,
+        "categories_with_potential_matches": observed_category_ids,
+        "categories_not_observed": [
+            category_id for category_id, _, _ in CATEGORY_DEFINITIONS
+            if category_id not in observed_category_ids and category_id != "DP13"
+        ],
+        "rogue_malware_status": "EXCLUDED_BY_SCOPE",
         "errors": len(report["errors"]),
     }
     write_json(output_root / "report.json", report)

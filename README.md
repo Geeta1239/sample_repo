@@ -8,7 +8,9 @@ The current implementation is validated against the controlled **Morrow Market**
 
 ### Challenge One — Flipkart read-only scan
 
-`scripts/flipkart_challenge_one.py` applies the Member 1 evidence workflow to six public Flipkart pages: the homepage, headphone search, mobile category, clothing category, an unavailable electronics route (to preserve the observed response), and iPhone search. It captures visible text, HTML, full-page screenshots, and candidate **DP01 False Urgency** matches using the existing detector. Findings are deliberately labelled `POTENTIAL` and are not legal conclusions.
+`scripts/flipkart_challenge_one.py` applies the Member 1 evidence workflow to six public Flipkart pages: the homepage, headphone search, mobile category, clothing category, an unavailable electronics route (to preserve the observed response), and iPhone search. It captures visible text, HTML, full-page screenshots, and candidate matches across the complete 13-category atlas: False Urgency, Basket Sneaking, Confirm Shaming, Forced Action, Subscription Trap, Interface Interference, Bait and Switch, Drip Pricing, Disguised Advertisement, Nagging, Trick Question, SaaS Billing, and Rogue Malware.
+
+Each page reports every category as `POTENTIAL`, `NOT_OBSERVED`, or `EXCLUDED_BY_SCOPE`. Findings are deliberately labelled `POTENTIAL` and are not legal conclusions. Rogue Malware is always `EXCLUDED_BY_SCOPE`: this safe scanner never creates, probes, or executes malicious behavior.
 
 The scanner is intentionally non-transactional: it does not log in, enter personal data, set a delivery location, add items to a cart, submit forms, or proceed to checkout.
 

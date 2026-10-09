@@ -5,13 +5,42 @@ from pathlib import Path
 from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
-from scripts.flipkart_challenge_one import DEFAULT_URLS, scan, slug
+from scripts.flipkart_challenge_one import CATEGORY_DEFINITIONS, DEFAULT_URLS, detect_category_matches, scan, slug
 
 
 class TestFlipkartChallengeOne(unittest.TestCase):
     def test_default_scan_covers_at_least_five_public_pages(self):
         self.assertGreaterEqual(len(DEFAULT_URLS), 5)
         self.assertTrue(all(url.startswith("https://www.flipkart.com") for url in DEFAULT_URLS))
+
+    def test_taxonomy_contains_all_thirteen_atlas_categories(self):
+        self.assertEqual(len(CATEGORY_DEFINITIONS), 13)
+        self.assertEqual(
+            [name for _, name, _ in CATEGORY_DEFINITIONS],
+            [
+                "False Urgency", "Basket Sneaking", "Confirm Shaming", "Forced Action",
+                "Subscription Trap", "Interface Interference", "Bait and Switch",
+                "Drip Pricing", "Disguised Advertisement", "Nagging", "Trick Question",
+                "SaaS Billing", "Rogue Malware",
+            ],
+        )
+
+    def test_category_heuristics_return_multiple_categories_and_never_malware(self):
+        text = (
+            "Only few left. Sponsored. Most popular. Platform fee. Free trial renews monthly. "
+            "Remind me later. No, I don't want to save money. Login to continue."
+        )
+        matches = detect_category_matches(text)
+        self.assertTrue(matches["DP01"])
+        self.assertTrue(matches["DP03"])
+        self.assertTrue(matches["DP04"])
+        self.assertTrue(matches["DP05"])
+        self.assertTrue(matches["DP06"])
+        self.assertTrue(matches["DP08"])
+        self.assertTrue(matches["DP09"])
+        self.assertTrue(matches["DP10"])
+        self.assertTrue(matches["DP12"])
+        self.assertEqual(matches["DP13"], [])
 
     def test_slug_is_safe_for_artifact_names(self):
         value = slug("https://www.flipkart.com/search?q=headphones")
@@ -80,6 +109,8 @@ class TestFlipkartChallengeOne(unittest.TestCase):
         self.assertEqual(report["summary"]["pages_scanned"], 1, report["errors"])
         self.assertEqual(saved["findings"][0]["pattern_id"], "DP01")
         self.assertEqual(saved["findings"][0]["status"], "POTENTIAL")
+        self.assertEqual(len(saved["categories"]), 13)
+        self.assertEqual(saved["summary"]["rogue_malware_status"], "EXCLUDED_BY_SCOPE")
 
 
 if __name__ == "__main__":
