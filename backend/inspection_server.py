@@ -209,19 +209,23 @@ class Handler(BaseHTTPRequestHandler):
         pattern_ids = [category_id for category_id, _, _ in CATEGORY_DEFINITIONS]
         if emit:
             emit("started", {"scan_id": scan_id, "target": target, "browser": "Chromium", "viewport": {"width": 1440, "height": 1000}, "total": len(DEFAULT_URLS), "pattern_ids": pattern_ids, "mode": "Flipkart 13-category read-only scan", "message": "Chromium browser started for the 13-category Flipkart scan."})
-        raw = scan_flipkart(DEFAULT_URLS, out_dir)
+        streamed_findings = []
+        def on_page(page: dict, index: int, total: int) -> None:
+            page_url = page.get("url_final", page.get("url_requested", ""))
+            if emit:
+                emit("stage", {"completed": index, "total": total, "page_index": index, "page_url": page_url, "page_title": page.get("title", ""), "page_status": "ERROR" if page.get("error") else "INSPECTED", "message": f"Inspected Flipkart page {index}/{total}: {page_url}"})
+            for item in page.get("category_results", []):
+                if item.get("status") != "POTENTIAL":
+                    continue
+                screenshot_file = REPO_ROOT / item["screenshot"]
+                screenshot_value = data_url(screenshot_file.read_bytes()) if screenshot_file.is_file() else item.get("screenshot", "")
+                finding = {**item, "id": item["pattern_id"], "name": item["pattern_name"], "route": item["page_url"], "selector": "body", "screenshot": screenshot_value, "screenshot_file": item.get("screenshot"), "observed_text": "; ".join(item.get("evidence_text", [])), "evidence": "; ".join(item.get("evidence_text", [])), "harm": "May influence a customer decision through pressure, confusion, cost, or reduced choice.", "fix": "Make the choice, cost, and consequence clear and neutral."}
+                streamed_findings.append(finding)
+                if emit:
+                    emit("finding", {"completed": index, "total": total, "finding": finding, "message": f"Potential {finding['name']} found on {page_url}."})
+        raw = scan_flipkart(DEFAULT_URLS, out_dir, on_page=on_page)
         pages = raw.get("pages", [])
-        for index, page in enumerate(pages, start=1):
-            if emit:
-                emit("stage", {"completed": index - 1, "total": len(DEFAULT_URLS), "route": page.get("url_final", page.get("url_requested")), "message": f"Captured Flipkart page {index}/{len(DEFAULT_URLS)} and evaluated all 13 categories."})
-        findings = []
-        for item in raw.get("findings", []):
-            screenshot_file = REPO_ROOT / item["screenshot"]
-            screenshot_value = data_url(screenshot_file.read_bytes()) if screenshot_file.is_file() else item.get("screenshot", "")
-            finding = {**item, "id": item["pattern_id"], "name": item["pattern_name"], "route": item["page_url"], "selector": "body", "screenshot": screenshot_value, "screenshot_file": item.get("screenshot"), "observed_text": "; ".join(item.get("evidence_text", [])), "evidence": "; ".join(item.get("evidence_text", [])), "harm": "May influence a customer decision through pressure, confusion, cost, or reduced choice.", "fix": "Make the choice, cost, and consequence clear and neutral."}
-            findings.append(finding)
-            if emit:
-                emit("finding", {"completed": len(pages), "total": len(DEFAULT_URLS), "finding": finding, "message": f"Captured potential {finding['name']} evidence from Flipkart."})
+        findings = streamed_findings
         summary = {**raw.get("summary", {}), "verified_findings": len(findings), "pages_scanned": len(pages), "flipkart_13_category_scan": True}
         finished_at = raw.get("scan", {}).get("finished_at") or datetime.now(timezone.utc).isoformat()
         report = {"scan": {**raw.get("scan", {}), "scan_id": scan_id, "target": target, "pattern_ids": pattern_ids, "finished_at": finished_at}, "categories": raw.get("categories", []), "pages": pages, "findings": findings, "summary": summary}

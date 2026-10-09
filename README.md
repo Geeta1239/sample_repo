@@ -12,6 +12,8 @@ The current implementation is validated against the controlled **Morrow Market**
 
 Each page reports every category as `POTENTIAL`, `NOT_OBSERVED`, or `EXCLUDED_BY_SCOPE`. Findings are deliberately labelled `POTENTIAL` and are not legal conclusions. Rogue Malware is always `EXCLUDED_BY_SCOPE`: this safe scanner never creates, probes, or executes malicious behavior.
 
+When `https://www.flipkart.com/` is entered in the ShadowBait dashboard, `backend/inspection_server.py` automatically selects this scanner instead of the controlled demo-site route. It streams a `PAGES INSPECTED` event after each public page capture and streams potential findings as soon as their page is processed. Restart the backend after pulling changes because the Python inspection process does not hot-reload.
+
 The scanner is intentionally non-transactional: it does not log in, enter personal data, set a delivery location, add items to a cart, submit forms, or proceed to checkout.
 
 ```bash

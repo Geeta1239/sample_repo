@@ -182,7 +182,7 @@ def build_category_results(matches: dict[str, list[str]], page_url: str, screens
     return results
 
 
-def scan(urls: list[str], output_root: Path, timeout_ms: int = 45_000) -> dict[str, Any]:
+def scan(urls: list[str], output_root: Path, timeout_ms: int = 45_000, on_page: Callable[[dict[str, Any], int, int], None] | None = None) -> dict[str, Any]:
     output_root.mkdir(parents=True, exist_ok=True)
     screenshots = output_root / "screenshots"
     dom = output_root / "dom"
@@ -248,6 +248,8 @@ def scan(urls: list[str], output_root: Path, timeout_ms: int = 45_000) -> dict[s
             except Exception as exc:  # keep the multi-page scan useful if one page fails
                 page_record["error"] = f"{type(exc).__name__}: {exc}"
                 report["errors"].append(page_record)
+            if on_page:
+                on_page(page_record, index, len(urls))
         context.close()
         browser.close()
 
